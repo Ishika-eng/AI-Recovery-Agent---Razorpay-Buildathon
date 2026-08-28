@@ -1,0 +1,679 @@
+<meta charset="utf-8">
+<title>Recovery Platform Architecture</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #eef0f4;
+    --ink: #14161c;
+    --ink-muted: #565c6b;
+    --ink-faint: #8b90a0;
+    --line: #d9dce3;
+    --line-strong: #b9bec9;
+    --accent: #4338ca;
+    --accent-soft: #eceafc;
+    --ai: #7c3aed;
+    --ai-soft: #f1eafd;
+    --policy: #b45309;
+    --policy-soft: #fdf1e2;
+    --human: #15803d;
+    --human-soft: #e9f6ee;
+    --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1116;
+      --surface: #161923;
+      --surface-2: #1d212c;
+      --ink: #e9eaf0;
+      --ink-muted: #a3a8b8;
+      --ink-faint: #6b7080;
+      --line: #2b3040;
+      --line-strong: #3a4055;
+      --accent: #9b91f5;
+      --accent-soft: #241f47;
+      --ai: #c4a4fb;
+      --ai-soft: #241a3d;
+      --policy: #f0b168;
+      --policy-soft: #3a2a12;
+      --human: #6fd99a;
+      --human-soft: #113322;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0f1116;
+    --surface: #161923;
+    --surface-2: #1d212c;
+    --ink: #e9eaf0;
+    --ink-muted: #a3a8b8;
+    --ink-faint: #6b7080;
+    --line: #2b3040;
+    --line-strong: #3a4055;
+    --accent: #9b91f5;
+    --accent-soft: #241f47;
+    --ai: #c4a4fb;
+    --ai-soft: #241a3d;
+    --policy: #f0b168;
+    --policy-soft: #3a2a12;
+    --human: #6fd99a;
+    --human-soft: #113322;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    line-height: 1.55;
+  }
+
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+
+  header.masthead {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 28px;
+    margin-bottom: 44px;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: clamp(28px, 4vw, 38px);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+
+  header.masthead p {
+    max-width: 62ch;
+    color: var(--ink-muted);
+    font-size: 16px;
+    margin: 0;
+  }
+
+  section {
+    margin-top: 56px;
+  }
+
+  section .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+
+  section .section-num {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+
+  h2 {
+    font-size: 21px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.005em;
+  }
+
+  section > p.lede {
+    color: var(--ink-muted);
+    max-width: 68ch;
+    font-size: 15px;
+    margin: 10px 0 22px;
+  }
+
+  figure {
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px 20px 16px;
+  }
+
+  .diagram-scroll {
+    overflow-x: auto;
+  }
+
+  svg.diagram {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-width: 640px;
+  }
+
+  figcaption {
+    font-size: 13px;
+    color: var(--ink-muted);
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  figcaption code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  .diagram text {
+    font-family: var(--font-mono);
+  }
+
+  .box-label {
+    font-size: 12.5px;
+    fill: var(--ink);
+  }
+
+  .box-sub {
+    font-size: 11px;
+    fill: var(--ink-muted);
+  }
+
+  .edge-label {
+    font-size: 10.5px;
+    fill: var(--ink-faint);
+  }
+
+  .lane-label {
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    fill: var(--ink-faint);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 16px;
+    font-size: 12px;
+    color: var(--ink-muted);
+  }
+
+  .legend span.swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    margin-right: 6px;
+    vertical-align: -1px;
+  }
+
+  .stack-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+  }
+
+  .stack-table th {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    padding: 0 12px 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .stack-table td {
+    padding: 10px 12px 10px 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+
+  .stack-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .stack-table code {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--accent);
+  }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">System architecture</p>
+    <h1>Universal payment recovery &amp; reconciliation platform</h1>
+    <p>
+      Three diagrams, each showing one mechanism: how an inbound provider event becomes a governed recovery
+      decision, how the data model keeps "what's owed" separate from "which transaction," and how a request
+      gets from an anonymous browser to a merchant's own scoped dashboard.
+    </p>
+  </header>
+
+  <section>
+    <div class="section-head">
+      <span class="section-num">01</span>
+      <h2>Ingestion &rarr; decision loop &rarr; resolution</h2>
+    </div>
+    <p class="lede">
+      Every provider webhook goes through the same pipeline regardless of shape. The loop in the middle is what
+      actually runs the recovery agent &mdash; AI proposes, policy gates, nothing executes without passing both. The
+      bottom box is the one the whole system exists to protect: it's reachable from three different paths, and
+      whichever gets there first wins.
+    </p>
+    <figure>
+      <div class="diagram-scroll">
+        <svg class="diagram" viewBox="0 0 960 1000" role="img" aria-label="Flow diagram: three provider webhook sources are normalized by provider adapters into a Universal Payment Event, checked against an idempotency ledger, correlated to a Payment Obligation, and recorded as a Payment Attempt. A failed payment enters the recovery cycle &mdash; verify obligation status, AI proposes an action, Policy Engine evaluates it as allowed, blocked, or requiring approval &mdash; while a succeeded payment (from any source) goes directly to atomic obligation resolution, which cancels any pending recovery action and closes the case.">
+
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <g stroke="currentColor" fill="none" opacity="0.35">
+            <line x1="20" y1="440" x2="940" y2="440" stroke-dasharray="2 4"/>
+            <line x1="20" y1="830" x2="940" y2="830" stroke-dasharray="2 4"/>
+          </g>
+          <text x="24" y="432" class="lane-label">INGESTION &amp; CORRELATION</text>
+          <text x="24" y="822" class="lane-label">RECOVERY CYCLE &mdash; re-run on every trigger</text>
+          <text x="24" y="852" class="lane-label">RESOLUTION &mdash; reachable from any channel</text>
+
+          <!-- Row 1: three sources -->
+          <rect x="40" y="20" width="260" height="50" rx="7" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+          <text x="170" y="41" text-anchor="middle" class="box-label">Razorpay webhook</text>
+          <text x="170" y="57" text-anchor="middle" class="box-sub">payment.failed / .captured</text>
+
+          <rect x="340" y="20" width="260" height="50" rx="7" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+          <text x="470" y="41" text-anchor="middle" class="box-label">Stripe webhook</text>
+          <text x="470" y="57" text-anchor="middle" class="box-sub">payment_intent.* </text>
+
+          <rect x="640" y="20" width="260" height="50" rx="7" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+          <text x="770" y="41" text-anchor="middle" class="box-label">External / merchant push</text>
+          <text x="770" y="57" text-anchor="middle" class="box-sub">POST /api/webhooks/external</text>
+
+          <!-- Row 2: adapter -->
+          <rect x="260" y="110" width="440" height="58" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="480" y="134" text-anchor="middle" class="box-label">Provider Adapter</text>
+          <text x="480" y="151" text-anchor="middle" class="box-sub">verifyWebhook &rarr; parseEvent &rarr; normalizeEvent</text>
+
+          <path d="M170,70 L170,90 Q170,100 200,100 L470,100 Q480,100 480,110" marker-end="url(#arrow)"/>
+          <path d="M470,70 L480,110" marker-end="url(#arrow)"/>
+          <path d="M770,70 L770,90 Q770,100 760,100 L490,100 Q480,100 480,110" marker-end="url(#arrow)"/>
+
+          <text x="490" y="188" class="edge-label">&rarr; Universal Payment Event (one shape, any provider)</text>
+
+          <!-- Row 3: idempotency -->
+          <rect x="260" y="205" width="440" height="50" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="480" y="226" text-anchor="middle" class="box-label">Idempotency check</text>
+          <text x="480" y="243" text-anchor="middle" class="box-sub">ExternalEvent (merchantId, provider, eventId)</text>
+
+          <rect x="740" y="205" width="180" height="50" rx="7" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="830" y="226" text-anchor="middle" class="box-label">Duplicate</text>
+          <text x="830" y="243" text-anchor="middle" class="box-sub">200, no-op</text>
+
+          <path d="M480,168 L480,205" marker-end="url(#arrow)"/>
+          <path d="M700,230 L740,230" marker-end="url(#arrow)"/>
+          <text x="708" y="222" class="edge-label">seen before</text>
+
+          <!-- Row 4: correlation -->
+          <rect x="260" y="295" width="440" height="52" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="480" y="317" text-anchor="middle" class="box-label">Correlate obligation</text>
+          <text x="480" y="334" text-anchor="middle" class="box-sub">by (merchantId, referenceType, referenceId) &mdash; never amount+customer</text>
+
+          <rect x="740" y="290" width="180" height="62" rx="7" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="830" y="311" text-anchor="middle" class="box-label">No match</text>
+          <text x="830" y="327" text-anchor="middle" class="box-sub">audit: CORRELATION_</text>
+          <text x="830" y="341" text-anchor="middle" class="box-sub">FAILED, manual review</text>
+
+          <path d="M480,255 L480,295" marker-end="url(#arrow)"/>
+          <text x="490" y="280" class="edge-label">new event</text>
+          <path d="M700,320 L740,320" marker-end="url(#arrow)"/>
+
+          <!-- Row 5: attempt -->
+          <rect x="260" y="385" width="440" height="48" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="480" y="405" text-anchor="middle" class="box-label">Record Payment Attempt</text>
+          <text x="480" y="421" text-anchor="middle" class="box-sub">linked to the obligation, never treated as the obligation</text>
+
+          <path d="M480,347 L480,385" marker-end="url(#arrow)"/>
+          <text x="490" y="370" class="edge-label">matched</text>
+
+          <!-- branch to recovery cycle -->
+          <path d="M420,433 L420,480" marker-end="url(#arrow)"/>
+          <text x="300" y="465" class="edge-label">event = PAYMENT_FAILED</text>
+
+          <!-- long right-margin path to resolution for direct success -->
+          <path d="M700,410 L940,410 L940,860 L790,860" marker-end="url(#arrow)" opacity="0.85"/>
+          <text x="790" y="403" text-anchor="end" class="edge-label">event = PAYMENT_SUCCEEDED (any provider)</text>
+
+          <!-- Row 6: verify -->
+          <rect x="260" y="480" width="440" height="50" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="480" y="501" text-anchor="middle" class="box-label">Verify obligation status</text>
+          <text x="480" y="517" text-anchor="middle" class="box-sub">fresh read &mdash; mandatory before every cycle</text>
+
+          <rect x="740" y="480" width="180" height="50" rx="7" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="830" y="501" text-anchor="middle" class="box-label">Already PAID</text>
+          <text x="830" y="517" text-anchor="middle" class="box-sub">stop, no action</text>
+
+          <path d="M700,505 L740,505" marker-end="url(#arrow)"/>
+
+          <!-- Row 7: AI -->
+          <rect x="260" y="570" width="440" height="50" rx="7" fill="var(--ai-soft)" stroke="var(--ai)"/>
+          <text x="480" y="591" text-anchor="middle" class="box-label">AI proposes one action</text>
+          <text x="480" y="607" text-anchor="middle" class="box-sub">from a fixed set &mdash; cannot execute, cannot invent one</text>
+
+          <path d="M480,530 L480,570" marker-end="url(#arrow)"/>
+          <text x="490" y="555" class="edge-label">still unpaid</text>
+
+          <!-- Row 8: policy -->
+          <rect x="260" y="660" width="440" height="50" rx="7" fill="var(--policy-soft)" stroke="var(--policy)"/>
+          <text x="480" y="681" text-anchor="middle" class="box-label">Policy Engine evaluates</text>
+          <text x="480" y="697" text-anchor="middle" class="box-sub">retry / message caps, contact window, dispute + opt-out holds</text>
+
+          <path d="M480,620 L480,660" marker-end="url(#arrow)"/>
+
+          <!-- Row 9: 3-way branch -->
+          <rect x="40" y="750" width="200" height="62" rx="7" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="140" y="771" text-anchor="middle" class="box-label">BLOCKED</text>
+          <text x="140" y="787" text-anchor="middle" class="box-sub">case.nextAction set,</text>
+          <text x="140" y="800" text-anchor="middle" class="box-sub">hold for next trigger</text>
+
+          <rect x="260" y="750" width="440" height="50" rx="7" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="480" y="771" text-anchor="middle" class="box-label">Execute action</text>
+          <text x="480" y="787" text-anchor="middle" class="box-sub">simulate outcome against the live obligation</text>
+
+          <rect x="740" y="750" width="180" height="62" rx="7" fill="var(--human-soft)" stroke="var(--human)"/>
+          <text x="830" y="771" text-anchor="middle" class="box-label">REQUIRES APPROVAL</text>
+          <text x="830" y="787" text-anchor="middle" class="box-sub">Approval queue &mdash;</text>
+          <text x="830" y="800" text-anchor="middle" class="box-sub">merchant Approve/Reject</text>
+
+          <path d="M400,710 L160,750" marker-end="url(#arrow)"/>
+          <text x="270" y="728" class="edge-label">blocked</text>
+          <path d="M480,710 L480,750" marker-end="url(#arrow)"/>
+          <text x="490" y="733" class="edge-label">allowed</text>
+          <path d="M560,710 L800,750" marker-end="url(#arrow)"/>
+          <text x="700" y="728" class="edge-label">needs approval</text>
+
+          <path d="M830,812 Q830,835 700,790" marker-end="url(#arrow)" opacity="0.85"/>
+          <text x="835" y="828" class="edge-label">approved</text>
+
+          <path d="M260,775 Q170,775 170,660 Q170,595 260,595" marker-end="url(#arrow)" opacity="0.85"/>
+          <text x="176" y="690" class="edge-label" transform="rotate(-90 176 690)">chain: not recovered &rarr; propose next step</text>
+
+          <!-- Row 10: resolve -->
+          <rect x="180" y="850" width="600" height="70" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="480" y="878" text-anchor="middle" class="box-label" font-weight="600">Resolve Obligation &mdash; atomic</text>
+          <text x="480" y="896" text-anchor="middle" class="box-sub">status &rarr; PAID &middot; cancel pending/approved actions &middot; close case</text>
+
+          <path d="M480,800 L480,850" marker-end="url(#arrow)"/>
+          <text x="490" y="835" class="edge-label">recovered</text>
+
+          <!-- audit pills -->
+          <rect x="180" y="945" width="190" height="34" rx="17" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="275" y="966" text-anchor="middle" class="box-sub">OBLIGATION_RESOLVED</text>
+
+          <rect x="385" y="945" width="270" height="34" rx="17" fill="var(--surface)" stroke="var(--accent)"/>
+          <text x="520" y="966" text-anchor="middle" class="box-sub" fill="var(--accent)">RECOVERY_ACTION_PREVENTED*</text>
+
+          <rect x="670" y="945" width="190" height="34" rx="17" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="765" y="966" text-anchor="middle" class="box-sub">RECOVERY_CASE_CLOSED</text>
+
+          <path d="M300,920 L275,945" marker-end="url(#arrow)" opacity="0.7"/>
+          <path d="M480,920 L520,945" marker-end="url(#arrow)" opacity="0.7"/>
+          <path d="M660,920 L765,945" marker-end="url(#arrow)" opacity="0.7"/>
+
+        </svg>
+      </div>
+      <figcaption>
+        The three source arrows at top all terminate in the same <code>UniversalPaymentEvent</code> shape before
+        anything downstream sees them. *<code>RECOVERY_ACTION_PREVENTED</code> only fires when a case had a
+        scheduled next step at the moment of resolution &mdash; that's the cross-channel save: a customer paid through
+        a different provider than the one that had just failed, and whatever was about to happen to them didn't.
+      </figcaption>
+    </figure>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--ai)"></span>AI proposal</span>
+      <span><span class="swatch" style="background:var(--policy)"></span>Policy Engine</span>
+      <span><span class="swatch" style="background:var(--human)"></span>Human-in-the-loop</span>
+      <span><span class="swatch" style="background:var(--accent)"></span>Obligation resolution</span>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-num">02</span>
+      <h2>The data model reasons about obligations, not transactions</h2>
+    </div>
+    <p class="lede">
+      A <code style="font-family:var(--font-mono)">PaymentObligation</code> can accumulate attempts from every
+      provider it's tried on. Only its own <code style="font-family:var(--font-mono)">status</code> field is
+      allowed to say "resolved" &mdash; no attempt, however it succeeded, gets to declare that on its own.
+    </p>
+    <figure>
+      <div class="diagram-scroll">
+        <svg class="diagram" viewBox="0 0 900 430" role="img" aria-label="Entity relationship diagram: a Merchant owns many Payment Obligations, each of which has many Payment Attempts from any provider and exactly one Recovery Case, which in turn has many Recovery Actions. An External Event ledger and an Audit Log are both scoped directly to the Merchant, independent of any single obligation.">
+          <defs>
+            <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <rect x="350" y="20" width="200" height="52" rx="7" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+          <text x="450" y="42" text-anchor="middle" class="box-label" font-weight="600">Merchant</text>
+          <text x="450" y="58" text-anchor="middle" class="box-sub">one account, one tenant</text>
+
+          <rect x="330" y="130" width="240" height="58" rx="7" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="450" y="153" text-anchor="middle" class="box-label" font-weight="600">Payment Obligation</text>
+          <text x="450" y="170" text-anchor="middle" class="box-sub">what's owed &mdash; the unit of resolution</text>
+
+          <rect x="630" y="130" width="230" height="58" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="745" y="153" text-anchor="middle" class="box-label">Payment Attempt</text>
+          <text x="745" y="170" text-anchor="middle" class="box-sub">one provider's try &mdash; never authoritative alone</text>
+
+          <rect x="330" y="245" width="240" height="52" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="450" y="267" text-anchor="middle" class="box-label">Recovery Case</text>
+          <text x="450" y="283" text-anchor="middle" class="box-sub">the working record for one obligation</text>
+
+          <rect x="330" y="352" width="240" height="52" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="450" y="374" text-anchor="middle" class="box-label">Recovery Action</text>
+          <text x="450" y="390" text-anchor="middle" class="box-sub">one AI proposal + policy verdict + outcome</text>
+
+          <rect x="20" y="130" width="230" height="58" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="135" y="153" text-anchor="middle" class="box-label">External Event</text>
+          <text x="135" y="170" text-anchor="middle" class="box-sub">idempotency ledger, per merchant+provider</text>
+
+          <rect x="20" y="352" width="230" height="52" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="135" y="374" text-anchor="middle" class="box-label">Audit Log</text>
+          <text x="135" y="390" text-anchor="middle" class="box-sub">every AI / Policy / Merchant / System decision</text>
+
+          <path d="M420,72 L420,130" marker-end="url(#arrow2)"/>
+          <text x="428" y="105" class="edge-label">owns &middot; 1&mdash;*</text>
+
+          <path d="M570,159 L630,159" marker-end="url(#arrow2)"/>
+          <text x="576" y="151" class="edge-label">1&mdash;* attempts</text>
+
+          <path d="M450,188 L450,245" marker-end="url(#arrow2)"/>
+          <text x="458" y="220" class="edge-label">1&mdash;1 case</text>
+
+          <path d="M450,297 L450,352" marker-end="url(#arrow2)"/>
+          <text x="458" y="328" class="edge-label">1&mdash;* actions</text>
+
+          <path d="M250,159 L330,159" marker-end="url(#arrow2)" stroke-dasharray="3 4" opacity="0.7"/>
+          <text x="253" y="151" class="edge-label">scoped to same merchant</text>
+
+          <path d="M480,72 Q680,90 480,130" marker-end="url(#arrow2)" opacity="0.5" stroke-dasharray="3 4"/>
+
+          <path d="M250,297 L250,352" marker-end="url(#arrow2)" stroke-dasharray="3 4" opacity="0.7"/>
+          <text x="30" y="335" class="edge-label">merchant-wide, not obligation-scoped</text>
+
+        </svg>
+      </div>
+      <figcaption>
+        <code>Payment Attempt</code> rows are append-only evidence; they never get edited into meaning something
+        else. Resolution is a property of the obligation, set exactly once by whichever attempt &mdash; or external
+        push &mdash; gets there first.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-num">03</span>
+      <h2>One login, one scoped dashboard, checked twice</h2>
+    </div>
+    <p class="lede">
+      A request for <code style="font-family:var(--font-mono)">/dashboard</code> is gated optimistically at the
+      edge &mdash; cookie-only, no database &mdash; and then again where it matters: the page itself re-verifies the session
+      and pulls only that merchant's rows. Every mutating route repeats the ownership check independently.
+    </p>
+    <figure>
+      <div class="diagram-scroll">
+        <svg class="diagram" viewBox="0 0 800 640" role="img" aria-label="Flow diagram: a browser request to a protected route is checked by proxy.ts, which decrypts the session cookie only, with no database access. No session redirects to login; an existing session on an auth route redirects to the dashboard. A valid session on a protected route reaches the Server Component, which re-verifies the session and loads the current merchant through the Data Access Layer. If the merchant has not accepted onboarding terms, they are redirected to the onboarding screen; otherwise the dashboard renders data scoped strictly to that merchant's id. Every mutating API route independently re-checks both session validity and resource ownership.">
+          <defs>
+            <marker id="arrow3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <rect x="250" y="20" width="300" height="50" rx="7" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+          <text x="400" y="41" text-anchor="middle" class="box-label">Browser requests /dashboard or /onboarding</text>
+          <text x="400" y="57" text-anchor="middle" class="box-sub"></text>
+
+          <rect x="200" y="110" width="400" height="60" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="400" y="133" text-anchor="middle" class="box-label">proxy.ts &mdash; optimistic check</text>
+          <text x="400" y="150" text-anchor="middle" class="box-sub">decrypts session cookie only, no DB read</text>
+
+          <rect x="30" y="110" width="150" height="60" rx="7" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="105" y="133" text-anchor="middle" class="box-label">&rarr; /login</text>
+          <text x="105" y="150" text-anchor="middle" class="box-sub">no session</text>
+
+          <rect x="620" y="110" width="150" height="60" rx="7" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="695" y="133" text-anchor="middle" class="box-label">&rarr; /dashboard</text>
+          <text x="695" y="150" text-anchor="middle" class="box-sub">already signed in</text>
+
+          <path d="M400,70 L400,110" marker-end="url(#arrow3)"/>
+          <path d="M200,140 L180,140" marker-end="url(#arrow3)"/>
+          <text x="182" y="132" class="edge-label">no cookie</text>
+          <path d="M600,140 L620,140" marker-end="url(#arrow3)"/>
+          <text x="602" y="132" class="edge-label">on /login, has session</text>
+
+          <rect x="200" y="220" width="400" height="60" rx="7" fill="var(--ai-soft)" stroke="var(--ai)"/>
+          <text x="400" y="243" text-anchor="middle" class="box-label">Server Component &mdash; DAL</text>
+          <text x="400" y="260" text-anchor="middle" class="box-sub">verifySession() + getCurrentMerchant() (real DB read)</text>
+
+          <path d="M400,170 L400,220" marker-end="url(#arrow3)"/>
+          <text x="410" y="200" class="edge-label">valid session, protected route</text>
+
+          <rect x="200" y="330" width="400" height="52" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="400" y="352" text-anchor="middle" class="box-label">termsAcceptedAt set?</text>
+          <text x="400" y="368" text-anchor="middle" class="box-sub">the onboarding gate</text>
+
+          <path d="M400,280 L400,330" marker-end="url(#arrow3)"/>
+
+          <rect x="30" y="330" width="150" height="60" rx="7" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="105" y="353" text-anchor="middle" class="box-label">&rarr; /onboarding</text>
+          <text x="105" y="370" text-anchor="middle" class="box-sub">accept terms</text>
+
+          <path d="M200,356 L180,356" marker-end="url(#arrow3)"/>
+          <text x="182" y="348" class="edge-label">not yet</text>
+
+          <rect x="200" y="440" width="400" height="60" rx="7" fill="var(--human-soft)" stroke="var(--human)"/>
+          <text x="400" y="463" text-anchor="middle" class="box-label">Dashboard renders</text>
+          <text x="400" y="480" text-anchor="middle" class="box-sub">every query filtered by session merchantId</text>
+
+          <path d="M400,382 L400,440" marker-end="url(#arrow3)"/>
+          <text x="408" y="415" class="edge-label">accepted</text>
+
+          <rect x="130" y="550" width="540" height="66" rx="8" fill="var(--policy-soft)" stroke="var(--policy)"/>
+          <text x="400" y="576" text-anchor="middle" class="box-label" font-weight="600">Every mutating API route</text>
+          <text x="400" y="594" text-anchor="middle" class="box-sub">approve &middot; reject &middot; advance &middot; seed &mdash; re-checks session AND resource ownership</text>
+          <text x="400" y="608" text-anchor="middle" class="box-sub">independently, not inherited from the page</text>
+
+          <path d="M400,500 L400,550" marker-end="url(#arrow3)"/>
+
+        </svg>
+      </div>
+      <figcaption>
+        Two different failure modes, two different checks: <code>proxy.ts</code> answers "is anyone logged in"
+        cheaply on every request; the DAL and each route answer "is <em>this</em> merchant allowed to see or
+        change <em>this</em> row," which requires an actual query.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-num">04</span>
+      <h2>Where each piece lives</h2>
+    </div>
+    <table class="stack-table">
+      <thead>
+        <tr><th>Layer</th><th>File(s)</th><th>Responsibility</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Provider adapters</td>
+          <td><code>src/lib/providers/*.ts</code></td>
+          <td>Verify signature, parse, normalize into <code>UniversalPaymentEvent</code>. One file per provider.</td>
+        </tr>
+        <tr>
+          <td>Merchant adapter</td>
+          <td><code>src/lib/merchants/*.ts</code></td>
+          <td>Translates a merchant's own business record into a normalized <code>ObligationContext</code>.</td>
+        </tr>
+        <tr>
+          <td>Recovery engine</td>
+          <td><code>src/lib/engine.ts</code></td>
+          <td>Correlation, the recovery cycle, execution, and atomic cross-channel resolution.</td>
+        </tr>
+        <tr>
+          <td>AI decision layer</td>
+          <td><code>src/lib/ai.ts</code></td>
+          <td>Structured proposal only &mdash; same input/output contract a real model call would use.</td>
+        </tr>
+        <tr>
+          <td>Policy engine</td>
+          <td><code>src/lib/policy.ts</code></td>
+          <td>Deterministic guardrails; final word on every action, independent of how the AI arrived at it.</td>
+        </tr>
+        <tr>
+          <td>Auth &amp; session</td>
+          <td><code>src/lib/session.ts</code>, <code>src/lib/dal.ts</code>, <code>src/proxy.ts</code></td>
+          <td>Signed JWT cookie sessions, verified via a Data Access Layer, gated at the edge and again per-page.</td>
+        </tr>
+        <tr>
+          <td>Data</td>
+          <td><code>prisma/schema.prisma</code></td>
+          <td>SQLite in dev, swappable for Postgres &mdash; the obligation-centric model above.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>Universal Payment Recovery &amp; Reconciliation &mdash; architecture reference</footer>
+
+</div>
