@@ -1,0 +1,215 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// SQLite has no native enum support in Prisma, so the enums below are plain
+// strings at the schema level. The allowed values live in src/lib/types.ts
+// and are enforced with zod at every write boundary.
+
+// A merchant using the platform. Everything is scoped to a merchant — no
+// obligation, attempt, case, or audit entry crosses tenant boundaries.
+model Merchant {
+  id           String  @id @default(cuid())
+  name         String
+  email        String  @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  // Set once the merchant accepts the service terms during onboarding.
+  // The dashboard is inaccessible until this is non-null — see
+  // src/app/dashboard/page.tsx.
+  termsAcceptedAt DateTime?
+
+  // Guardrails the Policy Engine enforces. Nothing downstream — AI included —
+  // can exceed these regardless of what it decides is optimal.
+  maxAutoRetries         Int @default(3)
+  maxMessagesPerCase     Int @default(3)
+  minMessageGapHours     Int @default(24)
+  autoApproveUnderPaise  Int @default(500000) // ₹5,000 — below this, gated actions can auto-execute
+  contactWindowStartHour Int @default(9)
+  contactWindowEndHour   Int @default(20)
+
+  obligations PaymentObligation[]
+  auditLogs   AuditLog[]
+  events      ExternalEvent[]
+}
+
+// PAYMENT OBLIGATION — the central entity in the whole system. Represents
+// "what is owed", not "which payment succeeded or failed". One obligation
+// can accumulate many PaymentAttempts across many providers; the moment any
+// one of them (or an externally-reported payment) resolves it, every attempt
+// downstream of it becomes moot.
+//
+// status: PENDING | PAYMENT_IN_PROGRESS | UNPAID | PARTIALLY_PAID | PAID |
+//         CANCELLED | EXPIRED | REFUNDED
+model PaymentObligation {
+  id         String @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  // What kind of business record this is (ORDER, SUBSCRIPTION, INVOICE...)
+  // and the merchant's own reference for it — e.g. "ORDER_789". This is the
+  // id every provider adapter is expected to correlate attempts back to.
+  referenceType String
+  referenceId   String
+  customerId    String?
+  customerContact String?
+
+  originalAmountPaise    Int
+  outstandingAmountPaise Int
+  currency               String @default("INR")
+
+  status String @default("UNPAID")
+
+  createdAt   DateTime  @default(now())
+  dueDate     DateTime?
+  resolvedAt  DateTime?
+  resolutionSource String? // e.g. "razorpay", "stripe", "external:bank_transfer"
+
+  attempts      PaymentAttempt[]
+  recoveryCase  RecoveryCase?
+
+  @@unique([merchantId, referenceType, referenceId])
+  @@index([merchantId, status])
+}
+
+// PAYMENT ATTEMPT — one provider-reported try against an obligation. Never
+// mutated into meaning something else; the obligation's status is the only
+// thing that gets to declare "resolved".
+//
+// status: CREATED | FAILED | SUCCEEDED
+model PaymentAttempt {
+  id          String @id @default(cuid())
+  obligationId String
+  obligation  PaymentObligation @relation(fields: [obligationId], references: [id])
+
+  provider          String // razorpay | stripe | external
+  providerPaymentId String?
+  providerEventId   String?
+
+  paymentMethod String?
+  amountPaise   Int
+  currency      String @default("INR")
+  status        String
+
+  failureCategory String? // ISSUER_DECLINE | TIMEOUT | INSUFFICIENT_FUNDS | GATEWAY_ERROR | NETWORK_ERROR | USER_DROPOFF | UNKNOWN
+  failureReason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([obligationId])
+  @@index([provider, providerPaymentId])
+}
+
+// RECOVERY CASE — the working record for "we're trying to get this
+// obligation paid". One case per obligation. The AI/Policy/Action loop reads
+// and writes here; it is what actually appears in the merchant's queue.
+//
+// status: OPEN | WAITING | RESOLVED | ESCALATED | CANCELLED
+model RecoveryCase {
+  id           String @id @default(cuid())
+  obligationId String @unique
+  obligation   PaymentObligation @relation(fields: [obligationId], references: [id])
+
+  status   String @default("OPEN")
+  strategy String? // human-readable summary of the chosen approach
+  riskLevel String @default("STANDARD") // STANDARD | HIGH_VALUE | DISPUTE_ACTIVE
+
+  recoveryAttempts Int @default(0)
+  messagesSent     Int @default(0)
+
+  nextAction   String?
+  nextActionAt DateTime?
+
+  contactOptedOut Boolean @default(false)
+
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  actions RecoveryAction[]
+
+  @@index([status])
+}
+
+// RECOVERY ACTION — one AI proposal run through the Policy Engine, with its
+// verdict and (if allowed) execution outcome recorded. This is the audit
+// trail a merchant reads to understand "why did the agent do X".
+//
+// actionType: WAIT | VERIFY_PAYMENT | SEND_REMINDER | GENERATE_PAYMENT_LINK |
+//             OFFER_ALTERNATIVE_PAYMENT_METHOD | SCHEDULE_FOLLOW_UP |
+//             RECORD_PROMISE_TO_PAY | ESCALATE_TO_HUMAN | STOP_RECOVERY
+// executionStatus: PROPOSED | POLICY_BLOCKED | PENDING_APPROVAL | APPROVED |
+//                  REJECTED | EXECUTED | FAILED | SKIPPED_ALREADY_PAID
+model RecoveryAction {
+  id     String @id @default(cuid())
+  caseId String
+  case   RecoveryCase @relation(fields: [caseId], references: [id])
+
+  actionType String
+  proposedBy String @default("AI") // AI | POLICY | MERCHANT | SYSTEM
+  reason     String
+
+  policyResult    String? // ALLOWED | BLOCKED | REQUIRES_APPROVAL
+  policyReasoning String?
+
+  executionStatus String @default("PROPOSED")
+  recoveredPaise  Int?
+
+  createdAt  DateTime  @default(now())
+  decidedAt  DateTime?
+  executedAt DateTime?
+
+  @@index([caseId])
+  @@index([executionStatus])
+}
+
+// EXTERNAL EVENT — every inbound provider/merchant event, kept as an
+// idempotency ledger. (merchantId, provider, externalEventId) is unique so
+// a retried webhook delivery is a no-op instead of double-processing —
+// scoped per merchant since two independent merchants' provider accounts
+// can otherwise report colliding event ids.
+model ExternalEvent {
+  id         String @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  provider        String
+  externalEventId String
+  eventType       String
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  idempotencyStatus String @default("PROCESSED") // PROCESSED | DUPLICATE | FAILED
+
+  rawPayload String // JSON-encoded, for debugging/replay
+
+  @@unique([merchantId, provider, externalEventId])
+  @@index([merchantId, receivedAt])
+}
+
+// Every decision the platform makes — classification, correlation, AI
+// proposal, policy verdict, execution — gets an entry here. Merchant-facing,
+// not a debug log.
+// actor: AI | POLICY | MERCHANT | SYSTEM
+model AuditLog {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+  actor      String
+  action     String
+  reasoning  String
+  metadata   String? // JSON-encoded extra context
+  createdAt  DateTime @default(now())
+
+  @@index([merchantId, createdAt])
+}
