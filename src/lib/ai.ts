@@ -59,6 +59,31 @@ export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
     lastFailure?.failureCategory === "NETWORK_ERROR" ||
     lastFailure?.failureCategory === "GATEWAY_ERROR";
 
+  // Mandate retry sequencer: a UPI Autopay / e-mandate debit isn't a
+  // one-off card charge — NPCI caps how many times a recurring mandate
+  // execution can be retried, far tighter than the generous retry budget
+  // every other instrument gets here. Once that cap is exhausted, a plain
+  // GENERATE_PAYMENT_LINK doesn't fix anything: the mandate itself needs
+  // fresh customer authorization, not another nudge at the same failed
+  // debit. Every failed attempt on the mandate counts toward the cap
+  // regardless of *why* it failed — the constraint is about attempt
+  // count, not failure category — so this is checked before, and takes
+  // priority over, the category-specific branches below.
+  const MANDATE_METHODS = ["emandate", "upi_autopay"];
+  const MANDATE_MAX_RETRIES = 1;
+  const isMandateExecution = lastFailure?.paymentMethod !== undefined && MANDATE_METHODS.includes(lastFailure.paymentMethod);
+  if (isMandateExecution) {
+    const mandateFailureCount = paymentHistory.filter(
+      (a) => a.paymentMethod !== undefined && MANDATE_METHODS.includes(a.paymentMethod)
+    ).length;
+    if (mandateFailureCount > MANDATE_MAX_RETRIES) {
+      return propose({
+        action: "OFFER_ALTERNATIVE_PAYMENT_METHOD",
+        reason: `Mandate execution has now failed ${mandateFailureCount} times for a ${customerDescriptor} — NPCI's own retry limits on recurring mandate debits mean another automated retry attempt isn't available past this point; the customer needs to re-authorize the mandate or provide a different payment method, not receive another nudge on the same failed debit.`,
+      });
+    }
+  }
+
   // Payment-method lifecycle (PRD Problem 28): an expired card is not just
   // "unlikely to clear on retry" like a generic decline — it is a *dead*
   // instrument. A plain GENERATE_PAYMENT_LINK would still default back to
