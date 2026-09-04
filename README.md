@@ -113,6 +113,14 @@ npx prisma migrate dev
 npm run dev
 ```
 
+In a second terminal, start the scheduler — without it, `WAIT` and
+`SCHEDULE_FOLLOW_UP` cases only ever advance when a webhook happens to
+arrive or someone clicks **Advance** by hand:
+
+```bash
+npm run scheduler
+```
+
 Visit the app, click **Get started**, create an account, and accept the
 onboarding terms — you'll land on an empty dashboard scoped to your new
 account. From there, click **Load demo batch**. It seeds your merchant and
@@ -122,10 +130,11 @@ routes (not internal shortcuts) to build:
 - a **flagship cross-channel scenario** — two Razorpay failures, then a
   Stripe success for the same obligation, cancelling the scheduled recovery
   step and showing up as a "Recovery Action Prevented" audit entry,
-- a **live in-progress case** you can click through with the dashboard's
-  **Advance** control (steps the state machine forward — WAIT → re-verify →
-  generate a payment link) and **Simulate paid elsewhere** control (fires
-  the same cross-channel resolution path on demand),
+- a **live in-progress case** — with `npm run scheduler` running, watch it
+  advance on its own (WAIT → re-verify → generate a payment link) with no
+  clicks at all, or force it forward immediately with the dashboard's
+  **Advance** control. **Simulate paid elsewhere** fires the cross-channel
+  resolution path on demand,
 - a **high-value case** parked in the approval queue (above the
   auto-approve ceiling),
 - a bulk batch of ordinary failures across both providers for volume.
@@ -137,6 +146,60 @@ the URLs shown on your dashboard — `/api/webhooks/razorpay?merchant=<your
 id>` and `/api/webhooks/stripe?merchant=<your id>`. A merchant, or any
 provider without a dedicated adapter yet, can report an out-of-band payment
 via `POST /api/webhooks/external?merchant=<your id>`.
+
+## Autonomous scheduling
+
+Next.js route handlers only run in response to a request — nothing runs on
+a timer by itself. Without something calling `/api/cron/tick` on a
+schedule, a case sitting in `WAITING` with nobody watching the dashboard
+and no new webhook arriving would never advance, which is most of what
+this agent exists to do (recovering the "customer might pay if nudged"
+middle ground, not just the cases someone happens to be watching).
+
+- **Locally**: `npm run scheduler` polls `/api/cron/tick` every 15s
+  (`scripts/tick-loop.mjs`).
+- **In production**: `vercel.json` registers the same route as a Vercel
+  Cron job (every 5 minutes); Vercel automatically sends
+  `Authorization: Bearer $CRON_SECRET` when that env var is set. Any other
+  scheduler (GitHub Actions, plain cron) works the same way — `POST` or
+  `GET` the route with that header.
+
+`processDueCases()` (`src/lib/engine.ts`) finds every `WAITING` case whose
+`nextActionAt` has passed, across every merchant, and re-runs the recovery
+cycle for each — except a case already sitting in the approval queue, which
+it explicitly skips rather than risk re-proposing on top of an unresolved
+human decision.
+
+## Real customer contact (the Action Adapter Layer)
+
+Deciding to nudge a customer only matters if the nudge actually reaches
+them. `src/lib/actions/` is what turns a decided action into a real
+external effect instead of a log line:
+
+- **`GENERATE_PAYMENT_LINK` / `OFFER_ALTERNATIVE_PAYMENT_METHOD`** create a
+  real Razorpay Payment Link via the `razorpay` SDK
+  (`src/lib/actions/paymentLink.ts`), using the `RAZORPAY_KEY_ID` /
+  `RAZORPAY_KEY_SECRET` already in `.env`. The link carries
+  `notes.obligation_id` and `reference_id`, so when a customer actually
+  pays it, the resulting `payment.captured` / `payment_link.paid` webhook
+  correlates straight back to the obligation through the same Priority-1
+  path every other event uses — no special case.
+- **`SEND_REMINDER`** sends a real email through whatever SMTP account is
+  configured (`SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM`
+  in `.env`) via `src/lib/actions/email.ts`, when the obligation's contact
+  looks like an email address.
+- **When a real channel is used, the engine stops guessing.** The
+  probabilistic "did they pay" simulation only ever runs when
+  `deliverAction()` reports `simulated: true` — no keys configured, no SMTP
+  configured, or a phone-number-only contact with no email channel to use.
+  Once a real payment link exists, resolution comes from an actual webhook,
+  the same as any other channel, never a coin flip.
+- Every `RecoveryAction` now records `deliveryChannel` and `deliveryRef` —
+  the real payment link URL or email message id, when there is one.
+
+Leave the Razorpay keys and SMTP vars blank and the platform behaves
+exactly as it did before — fully demoable with zero external credentials.
+Fill them in and the same decision loop starts having real-world effects.
 
 ## Testing
 
@@ -163,3 +226,24 @@ exercises them yet — resolution today is all-or-nothing. There's no
 provider-outage anomaly detection, and outbound provider/merchant API calls
 aren't modeled (everything is webhook-driven), so failure handling for
 those calls doesn't apply yet.
+
+**Customer-value calibration** (`src/lib/ai.ts`): `RecoveryCaseContext`'s
+customer-value tier (derived from prior successful payments — see
+`GenericEcommerceAdapter.getCustomerContext`) now actually changes the
+decision, not just the reasoning text. A HIGH-value, long-tenured customer
+gets a longer wait before the first nudge (30 min vs. 2 min for a brand-new
+one — more patience for a relationship worth protecting) and escalates to a
+human after just one unanswered automated attempt instead of three. This is
+still a two-lever calibration (wait duration, escalation threshold), not a
+full re-weighting of every decision — the choice *between* SEND_REMINDER /
+GENERATE_PAYMENT_LINK / OFFER_ALTERNATIVE_PAYMENT_METHOD is still driven
+purely by failure category, and the Policy Engine's amount ceiling remains
+the only thing sensitive to the payment's absolute size.
+
+Real delivery (see "Real customer contact" above) covers payment links and
+email. There's still no SMS/WhatsApp channel, so a customer whose only
+contact on file is a phone number can't currently be reached for a plain
+`SEND_REMINDER` — a real Razorpay Payment Link's own `notify.sms` will
+still text them when a phone number was provided at creation, but the
+platform doesn't yet send its own SMS/WhatsApp messages independently of
+that.
