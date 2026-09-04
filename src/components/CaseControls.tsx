@@ -14,10 +14,13 @@ import { useState } from "react";
 // is src/app/api/optout/route.ts. "Write off" is the terminal decision a
 // case previously had no way to reach — a case escalated once, or a dozen
 // times, but nothing ever actually closed it; this is the human deciding
-// to stop, not the AI proposing a pause.
+// to stop, not the AI proposing a pause. "Record promise to pay" is the
+// merchant-side trigger for RECORD_PROMISE_TO_PAY — a promise made on a
+// call is something only a human can hear, so the AI never proposes this
+// itself; see recordPromiseToPay in src/lib/engine.ts.
 export function CaseControls({ caseId, obligationId }: { caseId: string; obligationId: string }) {
   const router = useRouter();
-  const [pending, setPending] = useState<"advance" | "external" | "optout" | "writeoff" | null>(null);
+  const [pending, setPending] = useState<"advance" | "external" | "optout" | "writeoff" | "promise" | null>(null);
 
   async function advance() {
     setPending("advance");
@@ -64,6 +67,16 @@ export function CaseControls({ caseId, obligationId }: { caseId: string; obligat
     }
   }
 
+  async function recordPromise() {
+    setPending("promise");
+    try {
+      await fetch(`/api/cases/${caseId}/promise-to-pay`, { method: "POST" });
+      router.refresh();
+    } finally {
+      setPending(null);
+    }
+  }
+
   return (
     <div className="flex gap-2">
       <button
@@ -97,6 +110,14 @@ export function CaseControls({ caseId, obligationId }: { caseId: string; obligat
         title="Stop pursuing this obligation permanently — a human decision, not an AI-proposed pause"
       >
         {pending === "writeoff" ? "Writing off…" : "Write off"}
+      </button>
+      <button
+        onClick={recordPromise}
+        disabled={pending !== null}
+        className="rounded border border-emerald-300 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+        title="Customer promised to pay on a call — parks the case for 24h and re-verifies automatically"
+      >
+        {pending === "promise" ? "Recording…" : "Record promise to pay"}
       </button>
     </div>
   );
