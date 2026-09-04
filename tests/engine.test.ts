@@ -852,3 +852,38 @@ describe("provider-outage detection — a systemic transient failure isn't this 
     expect(declineAction.actionType).toBe("GENERATE_PAYMENT_LINK");
   });
 });
+
+describe("AI-vs-rules baseline recording (PRD Problem 37)", () => {
+  it("records the naive fixed-schedule baseline alongside every AI decision, without executing it", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_BASELINE_1", amountPaise: 100000 });
+
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_baseline_1", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+
+    // The AI waits on a first-looking-transient failure; the naive
+    // baseline always sends a reminder on the first touch — a genuine
+    // divergence, and neither the executionStatus nor deliveryChannel
+    // should show any sign the baseline itself ever ran.
+    expect(action.baselineAction).toBe("SEND_REMINDER");
+    expect(action.actionType).toBe("WAIT");
+    expect(action.deliveryChannel).toBeNull();
+  });
+
+  it("agrees with the baseline on a first-touch reminder when nothing calibrated applies", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_BASELINE_2", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "OPEN", recoveryAttempts: 1, messagesSent: 0 } });
+    await db.paymentAttempt.create({
+      data: { obligationId: obligation.id, provider: "razorpay", providerPaymentId: "pay_baseline_2", amountPaise: 100000, status: "FAILED", failureCategory: "USER_DROPOFF" },
+    });
+
+    await runRecoveryCycle(obligation.id);
+
+    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(action.actionType).toBe("SEND_REMINDER");
+    expect(action.baselineAction).toBe("SEND_REMINDER");
+  });
+});
