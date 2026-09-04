@@ -1,5 +1,6 @@
 import Link from "next/link";
 import GhostFibers from "@/components/GhostFibers";
+import { DarkBodyBackground } from "@/components/DarkBodyBackground";
 
 const PRINCIPLES = [
   {
@@ -25,38 +26,55 @@ const PLATFORMS = ["E-commerce", "SaaS billing", "EdTech", "Marketplaces", "Subs
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-white text-neutral-900">
-      <header className="border-b border-neutral-200">
+    <div className="relative min-h-screen bg-neutral-950 text-white">
+      <DarkBodyBackground />
+      {/* The animated canvas is deliberately confined to a fixed-height
+          block, not stretched across the whole page. Tried that first —
+          this shader's glow/vignette terms are single, non-repeating
+          radial gradients (not periodic), so stretched over a much
+          taller canvas they only ever light up once, near its vertical
+          center, and everywhere else reads as flat near-black — no
+          amount of prop-tuning fixed that, it's how the shader itself
+          is built. This is the standard, reliable version of "the
+          background extends the whole way down": the animation lives
+          where it actually looks good (roughly one viewport tall), a
+          gradient fades its bottom edge into the flat `bg-neutral-950`
+          this root div already carries, and that same flat dark colour
+          — not an animated one — continues, genuinely unbroken, for
+          however far the page scrolls. */}
+      <div className="absolute inset-x-0 top-0 h-screen min-h-[640px] -z-10">
+        <GhostFibers
+          lineColor="#1b1650"
+          glowColor="#4f46e5"
+          speed={0.18}
+          scale={2.2}
+          layers={4}
+          glowIntensity={0.85}
+          brightness={1.4}
+          blueBoost={1}
+          vignette={0.9}
+          grain={0.04}
+        />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-b from-transparent to-neutral-950" />
+      </div>
+
+      <header className="relative z-10 border-b border-white/10">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
           <span className="text-sm font-semibold tracking-tight">Universal Recovery</span>
           <nav className="flex items-center gap-4 text-sm">
-            <Link href="/login" className="text-neutral-600 hover:text-neutral-900">
+            <Link href="/login" className="text-neutral-300 hover:text-white">
               Sign in
             </Link>
-            <Link href="/signup" className="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">
+            <Link href="/signup" className="rounded bg-white px-4 py-2 font-medium text-neutral-900 hover:bg-neutral-200">
               Get started
             </Link>
           </nav>
         </div>
       </header>
 
-      <main>
-        <section className="relative overflow-hidden bg-neutral-950">
-          <div className="absolute inset-0">
-            <GhostFibers
-              lineColor="#1b1650"
-              glowColor="#4f46e5"
-              speed={0.18}
-              scale={2.2}
-              layers={4}
-              glowIntensity={0.85}
-              brightness={1.4}
-              blueBoost={1}
-              vignette={0.9}
-              grain={0.04}
-            />
-          </div>
-          <div className="relative mx-auto max-w-4xl px-6 py-24 text-center sm:py-28">
+      <main className="relative z-10">
+        <section className="px-6 py-24 text-center sm:py-28">
+          <div className="mx-auto max-w-4xl">
             <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl">
               Universal payment recovery.
               <br />
@@ -78,25 +96,31 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="border-t border-neutral-200 bg-neutral-50 py-16">
+        <section className="border-t border-white/10 py-16">
           <div className="mx-auto max-w-4xl px-6">
-            <p className="text-center text-sm uppercase tracking-wide text-neutral-500">Works across</p>
+            <p className="text-center text-sm uppercase tracking-wide text-neutral-400">Works across</p>
             <div className="mt-6 grid gap-8 sm:grid-cols-2">
               <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-neutral-400">Payment providers</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">Payment providers</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {PROVIDERS.map((p) => (
-                    <span key={p} className="rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-700">
+                    <span
+                      key={p}
+                      className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-sm text-neutral-100 backdrop-blur-sm"
+                    >
                       {p}
                     </span>
                   ))}
                 </div>
               </div>
               <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-neutral-400">Business platforms</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">Business platforms</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {PLATFORMS.map((p) => (
-                    <span key={p} className="rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-700">
+                    <span
+                      key={p}
+                      className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-sm text-neutral-100 backdrop-blur-sm"
+                    >
                       {p}
                     </span>
                   ))}
@@ -106,19 +130,21 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="mx-auto max-w-5xl px-6 py-16">
-          <h2 className="text-center text-2xl font-semibold text-neutral-900">How universal recovery works</h2>
-          <div className="mt-10 grid gap-6 sm:grid-cols-2">
-            {PRINCIPLES.map((p) => (
-              <div key={p.title} className="rounded border border-neutral-200 p-5">
-                <h3 className="font-medium text-neutral-900">{p.title}</h3>
-                <p className="mt-2 text-sm text-neutral-600">{p.body}</p>
-              </div>
-            ))}
+        <section className="border-t border-white/10 px-6 py-16">
+          <div className="mx-auto max-w-5xl">
+            <h2 className="text-center text-2xl font-semibold text-white">How universal recovery works</h2>
+            <div className="mt-10 grid gap-6 sm:grid-cols-2">
+              {PRINCIPLES.map((p) => (
+                <div key={p.title} className="rounded border border-white/15 bg-white/5 p-5 backdrop-blur-sm">
+                  <h3 className="font-medium text-white">{p.title}</h3>
+                  <p className="mt-2 text-sm text-neutral-300">{p.body}</p>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 
-        <section className="border-t border-neutral-200 bg-neutral-900 py-16 text-center">
+        <section className="border-t border-white/10 py-16 text-center">
           <h2 className="text-2xl font-semibold text-white">Set it up in minutes.</h2>
           <p className="mx-auto mt-3 max-w-xl text-neutral-300">
             Create an account, accept what the agent is authorized to do, and point your provider webhooks at your
@@ -130,7 +156,7 @@ export default function LandingPage() {
         </section>
       </main>
 
-      <footer className="border-t border-neutral-200 py-8 text-center text-xs text-neutral-400">
+      <footer className="relative z-10 border-t border-white/10 py-8 text-center text-xs text-neutral-500">
         Built for the Razorpay Buildathon · test mode
       </footer>
     </div>
