@@ -289,6 +289,41 @@ or other externally-reported payment can be partial too. The dashboard
 flags any resolved obligation with excess paid via an amber "Overpaid by
 ₹X" badge next to its resolution source.
 
+## Payment-method lifecycle — a dead card isn't the same failure as a busy one
+
+Not every failure means "try again later." A card that has expired can
+never clear, no matter how many times it's retried or how long the
+platform waits — but before this, `classifyFailure()` folded that into the
+same `ISSUER_DECLINE` bucket as a temporary decline, and the AI responded
+identically to both: generate a fresh payment link and hope. A payment
+link still defaults back to the same saved card, so that "fix" was really
+just a slower way of doing nothing.
+
+`EXPIRED_CARD` is now its own failure category (checked before the generic
+decline/gateway patterns, so it wins on overlap), and the AI layer treats
+it as a genuinely different problem:
+
+- It skips straight to `OFFER_ALTERNATIVE_PAYMENT_METHOD` — explicitly
+  asking for a different instrument — rather than `GENERATE_PAYMENT_LINK`,
+  and skips any wait window entirely, since nothing about time changes an
+  expired card's outcome.
+- On a `SUBSCRIPTION` obligation specifically, an expired card isn't a
+  one-off failure — the identical charge will fail again on every future
+  renewal until the card is replaced. After one automated attempt, this
+  escalates to a human immediately rather than working through the
+  customer-value-scaled message budget that a normal case gets, since more
+  automated attempts against a dead instrument only delay a failure that
+  automation can't fix.
+
+**Known gap**: provider adapters currently hardcode `obligationReferenceType`
+to `"ORDER"` on every webhook (see `src/lib/providers/razorpay.ts` and
+`stripe.ts`) — they don't yet read back the merchant's own reference type
+from the provider payload. This means an obligation actually stored as
+`SUBSCRIPTION` won't correlate through a real webhook unless queried by an
+`ORDER`-typed reference, so the subscription-specific fast-escalation path
+above is fully covered by unit tests (`tests/ai.test.ts`) but not yet
+exercised by a live Razorpay/Stripe webhook end to end.
+
 ## Testing
 
 ```bash
@@ -305,12 +340,14 @@ end to end.
 ## Known limitations
 
 The PRD's "real-world problems" checklist is broader than what's wired up
-end to end. **Refunds** and **partial payments/overpayment** are now
-handled (see "Refunds and chargebacks" and "Partial payment and
-overpayment" above). There's no provider-outage anomaly detection, no
-fraud/suspicious-pattern detection, and outbound provider/merchant API
-calls aren't modeled (everything is webhook-driven), so failure handling
-for those calls doesn't apply yet.
+end to end. **Refunds**, **partial payments/overpayment**, and **payment-
+method lifecycle** (expired cards) are now handled (see "Refunds and
+chargebacks", "Partial payment and overpayment", and "Payment-method
+lifecycle" above — the last has one known gap around subscription
+correlation, noted in that section). There's no provider-outage anomaly
+detection, no fraud/suspicious-pattern detection, and outbound
+provider/merchant API calls aren't modeled (everything is webhook-driven),
+so failure handling for those calls doesn't apply yet.
 
 **Dispute holds** and **customer opt-out** are no longer guardrails
 without a trigger:
