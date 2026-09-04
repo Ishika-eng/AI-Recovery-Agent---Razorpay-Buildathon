@@ -183,6 +183,16 @@ export const RecoveryCaseContext = z.object({
     waitedAlready: z.boolean(),
     lastActionAt: z.string().nullable(),
   }),
+  // PRD Problem 11: whether the same provider is producing the same
+  // transient failure across many other obligations right now — see
+  // src/lib/outage.ts. Lets the AI tell "this customer's payment keeps
+  // failing" apart from "the provider itself is down," which call for very
+  // different responses (wait it out vs. contact the customer).
+  providerHealth: z.object({
+    suspectedOutage: z.boolean(),
+    affectedObligations: z.number(),
+    windowMinutes: z.number(),
+  }),
   allowedActions: z.array(ActionType),
 });
 export type RecoveryCaseContext = z.infer<typeof RecoveryCaseContext>;
