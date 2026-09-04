@@ -7,6 +7,7 @@ import {
   ingestProviderEvent,
   optOutCustomer,
   processDueCases,
+  recordPromiseToPay,
   rejectAction,
   resolveExternalPayment,
   runRecoveryCycle,
@@ -1300,5 +1301,82 @@ describe("mandate retry sequencer — a failed UPI Autopay debit follows NPCI's 
     const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
     const lastAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
     expect(lastAction.reason).not.toMatch(/mandate/i);
+  });
+});
+
+describe("promise-to-pay tracker — a real trigger, and a real consequence for breaking one", () => {
+  it("records and executes a promise, parking the case for ~24h", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_PROMISE_1", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "OPEN" } });
+
+    await recordPromiseToPay(obligation.id, "Customer said they'll pay by Friday");
+
+    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(action.actionType).toBe("RECORD_PROMISE_TO_PAY");
+    expect(action.proposedBy).toBe("MERCHANT");
+    expect(action.executionStatus).toBe("EXECUTED");
+
+    const updatedCase = await db.recoveryCase.findUniqueOrThrow({ where: { id: recoveryCase.id } });
+    expect(updatedCase.status).toBe("WAITING");
+    expect(updatedCase.nextActionAt).not.toBeNull();
+    const hoursUntilNext = (updatedCase.nextActionAt!.getTime() - Date.now()) / 3_600_000;
+    expect(hoursUntilNext).toBeGreaterThan(23);
+    expect(hoursUntilNext).toBeLessThanOrEqual(24);
+  });
+
+  it("is a no-op once the obligation is already paid", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_PROMISE_PAID", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "OPEN" } });
+    await resolveExternalPayment(obligation.id, "ext_promise_paid");
+
+    const result = await recordPromiseToPay(obligation.id, "too late, already paid");
+    expect(result).toMatchObject({ skipped: true });
+  });
+
+  it("escalates to a human on the next cycle once a promise goes unkept past its window", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_PROMISE_BROKEN", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+    // A promise recorded 25 hours ago — past the 24h window — with the
+    // obligation still unpaid.
+    await db.recoveryAction.create({
+      data: {
+        caseId: recoveryCase.id,
+        actionType: "RECORD_PROMISE_TO_PAY",
+        proposedBy: "MERCHANT",
+        reason: "Customer promised to pay",
+        executionStatus: "EXECUTED",
+        executedAt: new Date(Date.now() - 25 * 3_600_000),
+      },
+    });
+
+    await runRecoveryCycle(obligation.id);
+
+    const latestAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(latestAction.actionType).toBe("ESCALATE_TO_HUMAN");
+    expect(latestAction.reason).toMatch(/broken/i);
+  });
+
+  it("does not escalate while a promise is still within its 24h window", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_PROMISE_PENDING", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+    await db.recoveryAction.create({
+      data: {
+        caseId: recoveryCase.id,
+        actionType: "RECORD_PROMISE_TO_PAY",
+        proposedBy: "MERCHANT",
+        reason: "Customer promised to pay",
+        executionStatus: "EXECUTED",
+        executedAt: new Date(Date.now() - 2 * 3_600_000), // 2h ago — still well within the window
+      },
+    });
+
+    await runRecoveryCycle(obligation.id);
+
+    const latestAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(latestAction.actionType).not.toBe("ESCALATE_TO_HUMAN");
   });
 });
