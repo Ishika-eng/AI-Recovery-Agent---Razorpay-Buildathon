@@ -29,6 +29,10 @@ const CUSTOMER_FACING_ACTIONS: ActionType[] = [
   "SEND_REMINDER",
   "GENERATE_PAYMENT_LINK",
   "OFFER_ALTERNATIVE_PAYMENT_METHOD",
+  // A recommended voice call is still customer contact, even though this
+  // platform doesn't place the call itself — opt-out and DND-window
+  // guardrails apply to it exactly the same as an automated message.
+  "RECOMMEND_VOICE_OUTREACH",
 ];
 
 // The Policy Engine (PRD §19) is deterministic and sits between the AI's
@@ -87,6 +91,13 @@ export function evaluatePolicy(action: ActionType, ctx: PolicyContext): PolicyVe
   if (action === "ESCALATE_TO_HUMAN") {
     // Escalation only means something if a human actually sees it.
     return { result: "REQUIRES_APPROVAL", reasoning: "Escalations always require merchant review, independent of amount." };
+  }
+
+  if (action === "RECOMMEND_VOICE_OUTREACH") {
+    // A phone call is a bigger commitment than an automated message —
+    // a human should decide whether to actually place it, not have this
+    // platform silently mark it done.
+    return { result: "REQUIRES_APPROVAL", reasoning: "A recommended voice call always requires merchant review — a human decides whether to actually place it." };
   }
 
   if (ctx.riskLevel === "HIGH_VALUE" || ctx.outstandingAmountPaise > ctx.merchant.autoApproveUnderPaise) {
