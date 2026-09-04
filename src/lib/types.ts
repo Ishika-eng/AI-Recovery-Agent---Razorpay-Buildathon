@@ -84,7 +84,7 @@ export type Provider = z.infer<typeof Provider>;
 // ---------------------------------------------------------------------------
 
 export const UniversalPaymentEvent = z.object({
-  eventType: z.enum(["PAYMENT_FAILED", "PAYMENT_SUCCEEDED", "PAYMENT_PENDING"]),
+  eventType: z.enum(["PAYMENT_FAILED", "PAYMENT_SUCCEEDED", "PAYMENT_PENDING", "DISPUTE_OPENED"]),
   provider: Provider,
   providerEventId: z.string(),
   merchantId: z.string(),
@@ -92,19 +92,27 @@ export const UniversalPaymentEvent = z.object({
   // The merchant-owned reference this attempt should correlate to — passed
   // through provider metadata (order.receipt, payment_intent.metadata, etc).
   // This is Priority-1 correlation per the PRD: never merge obligations on
-  // amount+customer alone.
-  obligationReferenceType: z.string().default("ORDER"),
-  obligationReferenceId: z.string(),
+  // amount+customer alone. Absent for DISPUTE_OPENED — a dispute payload
+  // doesn't carry the merchant's own reference, only the disputed payment's
+  // provider id, so that event type correlates through disputedPaymentId
+  // (a PaymentAttempt lookup) instead. See processNormalizedEvent.
+  obligationReferenceType: z.string().optional(),
+  obligationReferenceId: z.string().optional(),
 
-  paymentAttempt: z.object({
-    providerPaymentId: z.string().optional(),
-    amountPaise: z.number().int().positive(),
-    currency: z.string().default("INR"),
-    paymentMethod: z.string().optional(),
-    status: AttemptStatus,
-    failureCategory: FailureCategory.optional(),
-    failureReason: z.string().optional(),
-  }),
+  paymentAttempt: z
+    .object({
+      providerPaymentId: z.string().optional(),
+      amountPaise: z.number().int().positive(),
+      currency: z.string().default("INR"),
+      paymentMethod: z.string().optional(),
+      status: AttemptStatus,
+      failureCategory: FailureCategory.optional(),
+      failureReason: z.string().optional(),
+    })
+    .optional(),
+
+  // DISPUTE_OPENED only.
+  disputedPaymentId: z.string().optional(),
 
   customerId: z.string().optional(),
   customerContact: z.string().optional(),
