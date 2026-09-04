@@ -8,11 +8,13 @@ import { useState } from "react";
 // /api/cron/tick — that's what actually fires WAIT/follow-up timers on
 // their own in the background). "Simulate paid elsewhere" stands in for the
 // customer completing payment through a channel this platform has no
-// dedicated webhook for — the interaction that triggers cross-channel
-// resolution live.
+// dedicated webhook for. "Mark opted out" is the merchant-side trigger for
+// a customer who said "don't contact me" over a channel (a phone call) this
+// platform has no inbound webhook for — the real, email-link-driven trigger
+// is src/app/api/optout/route.ts.
 export function CaseControls({ caseId, obligationId }: { caseId: string; obligationId: string }) {
   const router = useRouter();
-  const [pending, setPending] = useState<"advance" | "external" | null>(null);
+  const [pending, setPending] = useState<"advance" | "external" | "optout" | null>(null);
 
   async function advance() {
     setPending("advance");
@@ -38,6 +40,16 @@ export function CaseControls({ caseId, obligationId }: { caseId: string; obligat
     }
   }
 
+  async function markOptedOut() {
+    setPending("optout");
+    try {
+      await fetch(`/api/cases/${caseId}/opt-out`, { method: "POST" });
+      router.refresh();
+    } finally {
+      setPending(null);
+    }
+  }
+
   return (
     <div className="flex gap-2">
       <button
@@ -55,6 +67,14 @@ export function CaseControls({ caseId, obligationId }: { caseId: string; obligat
         title="Simulate the customer completing payment through another channel"
       >
         {pending === "external" ? "Paying…" : "Simulate paid elsewhere"}
+      </button>
+      <button
+        onClick={markOptedOut}
+        disabled={pending !== null}
+        className="rounded border border-amber-300 bg-amber-50 px-3 py-1 text-sm font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+        title="Customer asked not to be contacted (e.g. on a call) — stop all automated communication"
+      >
+        {pending === "optout" ? "Updating…" : "Mark opted out"}
       </button>
     </div>
   );
