@@ -231,22 +231,33 @@ const GhostFibers = ({
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new Renderer({
-      webgl: 2,
-      alpha: false,
-      antialias: false,
-      dpr: Math.min(Math.max(dpr, 0.5), 2),
-    });
-    const gl = renderer.gl;
-    const canvas = gl.canvas;
+    let renderer: Renderer;
+    let gl: Renderer["gl"];
+    let canvas: HTMLCanvasElement;
+    try {
+      renderer = new Renderer({
+        webgl: 2,
+        alpha: false,
+        antialias: false,
+        dpr: Math.min(Math.max(dpr, 0.5), 2),
+      });
+      gl = renderer.gl;
+      canvas = gl.canvas as HTMLCanvasElement;
+    } catch (error) {
+      console.error("GhostFibers: WebGL2 unavailable, showing static fallback.", error);
+      container.classList.add("ghost-fibers-fallback");
+      return;
+    }
     canvas.style.width = "100%";
     canvas.style.height = "100%";
     canvas.style.display = "block";
     canvas.setAttribute("aria-hidden", "true");
-    container.appendChild(canvas);
 
-    const geometry = new Triangle(gl);
-    const program = new Program(gl, {
+    let program: Program;
+    let mesh: Mesh;
+    try {
+      const geometry = new Triangle(gl);
+      program = new Program(gl, {
       vertex,
       fragment,
       uniforms: {
@@ -278,7 +289,13 @@ const GhostFibers = ({
         uGlowColor: { value: new Float32Array(hexToRgb("#3437A0")) },
       },
     });
-    const mesh = new Mesh(gl, { geometry, program });
+      mesh = new Mesh(gl, { geometry, program });
+    } catch (error) {
+      console.error("GhostFibers: shader setup failed, showing static fallback.", error);
+      container.classList.add("ghost-fibers-fallback");
+      return;
+    }
+    container.appendChild(canvas);
 
     let frameId = 0;
     let elapsed = 0;
@@ -287,7 +304,13 @@ const GhostFibers = ({
     let frameRate = 60;
     let isPaused = false;
     let isVisible = true;
-    let isPageVisible = !document.hidden;
+    // Start optimistically rather than reading document.hidden here: a
+    // spurious/racy "hidden" read at the exact instant of mount (backgrounded
+    // tab, multi-monitor focus quirks) would otherwise permanently stall the
+    // loop, since nothing else re-checks it until a real visibilitychange
+    // fires. The browser already throttles rAF for genuinely hidden tabs, so
+    // this flag only needs to react to actual subsequent changes.
+    let isPageVisible = true;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     const render = () => renderer.render({ scene: mesh });
