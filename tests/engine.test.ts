@@ -782,3 +782,73 @@ describe("partial payment and overpayment — a payment doesn't have to match wh
     expect(updated.outstandingAmountPaise).toBe(75000);
   });
 });
+
+describe("provider-outage detection — a systemic transient failure isn't this customer's problem (PRD Problem 11)", () => {
+  it("waits longer instead of contacting the customer once enough other obligations hit the same transient failure on the same provider", async () => {
+    const merchant = await createMerchant();
+    const obligations = await Promise.all(
+      ["ORDER_OUTAGE_1", "ORDER_OUTAGE_2", "ORDER_OUTAGE_3"].map((referenceId) =>
+        createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId, amountPaise: 100000 })
+      )
+    );
+
+    // First two failures: not enough distinct obligations yet to suspect an
+    // outage (threshold is 3), so these still get normal single-obligation
+    // treatment.
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_outage_1", obligationId: obligations[0].referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_outage_2", obligationId: obligations[1].referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    // Third distinct obligation crosses the threshold — this one should
+    // see the outage and respond differently.
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_outage_3", obligationId: obligations[2].referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    const caseThree = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligations[2].id } });
+    const actionThree = await db.recoveryAction.findFirstOrThrow({ where: { caseId: caseThree.id }, orderBy: { createdAt: "desc" } });
+    expect(actionThree.actionType).toBe("WAIT");
+    expect(actionThree.reason).toMatch(/outage/i);
+  });
+
+  it("does not suspect an outage from a single isolated transient failure", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_OUTAGE_ISOLATED", amountPaise: 100000 });
+
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_isolated", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(action.actionType).toBe("WAIT");
+    expect(action.reason).not.toMatch(/outage/i);
+  });
+
+  it("still treats a hard decline as a genuine instrument problem even while a suspected outage is ongoing", async () => {
+    const merchant = await createMerchant();
+    const obligations = await Promise.all(
+      ["ORDER_OUTAGE_HD_1", "ORDER_OUTAGE_HD_2", "ORDER_OUTAGE_HD_3", "ORDER_OUTAGE_HD_4"].map((referenceId) =>
+        createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId, amountPaise: 100000 })
+      )
+    );
+
+    for (let i = 0; i < 3; i++) {
+      await pushRazorpayFailure(merchant.id, {
+        paymentId: `pay_outage_hd_${i}`,
+        obligationId: obligations[i].referenceId,
+        amountPaise: 100000,
+        errorCode: "GATEWAY_TIMEOUT",
+      });
+    }
+
+    // A 4th obligation, but with a genuine hard decline rather than a
+    // transient failure — the suspected outage must not suppress this.
+    await pushRazorpayFailure(merchant.id, {
+      paymentId: "pay_outage_hd_decline",
+      obligationId: obligations[3].referenceId,
+      amountPaise: 100000,
+      errorCode: "CARD_DECLINED",
+      errorDescription: "Card was declined",
+    });
+
+    const declineCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligations[3].id } });
+    const declineAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: declineCase.id } });
+    expect(declineAction.actionType).toBe("GENERATE_PAYMENT_LINK");
+  });
+});
