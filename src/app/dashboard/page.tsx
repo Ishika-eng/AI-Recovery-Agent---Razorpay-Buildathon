@@ -59,7 +59,7 @@ export default async function DashboardPage() {
   if (!merchant) redirect("/api/auth/clear-session");
   if (!merchant.termsAcceptedAt) redirect("/onboarding");
 
-  const [obligations, pendingActions, recentAudit, recoveryActionsPrevented, allAttempts, openCases, resolvedObligations, attributedSum, aiVsBaselineActions] =
+  const [obligations, pendingActions, recentAudit, recoveryActionsPrevented, allAttempts, openCases, resolvedObligations, attributedSum, aiVsBaselineActions, promiseActions] =
     await Promise.all([
       db.paymentObligation.findMany({ where: { merchantId: merchant.id }, orderBy: { createdAt: "desc" } }),
       db.recoveryAction.findMany({
@@ -97,6 +97,14 @@ export default async function DashboardPage() {
       db.recoveryAction.findMany({
         where: { proposedBy: "AI", baselineAction: { not: null }, case: { obligation: { merchantId: merchant.id } } },
         select: { actionType: true, baselineAction: true },
+      }),
+      // Promise-to-pay tracker: every RECORD_PROMISE_TO_PAY action that
+      // actually executed, with just enough of its obligation to bucket
+      // it into kept / broken / still pending below.
+      db.recoveryAction.findMany({
+        where: { actionType: "RECORD_PROMISE_TO_PAY", executionStatus: "EXECUTED", case: { obligation: { merchantId: merchant.id } } },
+        select: { executedAt: true, case: { select: { obligation: { select: { status: true, resolvedAt: true } } } } },
+        orderBy: { executedAt: "desc" },
       }),
     ]);
 
@@ -144,6 +152,21 @@ export default async function DashboardPage() {
       return acc;
     }, {})
   ).sort((a, b) => b[1] - a[1]);
+
+  // Promise-to-pay tracker: kept if the obligation was paid at or after
+  // the promise was recorded; broken if the 24h window has passed with it
+  // still unresolved; otherwise still within the window.
+  const PROMISE_WINDOW_MS = 24 * 3_600_000;
+  const promiseOutcomes = promiseActions.map((a) => {
+    const obligation = a.case.obligation;
+    const kept = obligation.status === "PAID" && obligation.resolvedAt !== null && a.executedAt !== null && obligation.resolvedAt >= a.executedAt;
+    const stillPending = !kept && a.executedAt !== null && isWithinLastMs(a.executedAt, PROMISE_WINDOW_MS);
+    const broken = !kept && !stillPending;
+    return kept ? "kept" : broken ? "broken" : "pending";
+  });
+  const promisesKept = promiseOutcomes.filter((o) => o === "kept").length;
+  const promisesBroken = promiseOutcomes.filter((o) => o === "broken").length;
+  const promisesPending = promiseOutcomes.filter((o) => o === "pending").length;
 
   const byFailureType = Object.entries(
     allAttempts
@@ -432,6 +455,23 @@ export default async function DashboardPage() {
                 ))}
               </div>
             )}
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-base font-semibold">Promise-to-pay tracker</h2>
+          <p className="mb-3 text-sm text-neutral-500">
+            Every &quot;Record promise to pay&quot; parks the case for 24h, then re-verifies automatically. A promise is
+            counted <span className="font-medium text-emerald-700">kept</span> if the obligation was paid at or
+            after it was made, <span className="font-medium text-red-700">broken</span> once the 24h window has
+            passed with it still unresolved, and <span className="font-medium text-amber-700">pending</span>{" "}
+            otherwise. A customer who breaks a promise escalates straight to a human on the next cycle rather than
+            getting another automated nudge.
+          </p>
+          <div className="grid grid-cols-3 gap-4">
+            <StatTile label="Kept" value={String(promisesKept)} accent="text-emerald-600" />
+            <StatTile label="Broken" value={String(promisesBroken)} accent="text-red-600" />
+            <StatTile label="Pending" value={String(promisesPending)} accent="text-amber-600" />
           </div>
         </section>
 
