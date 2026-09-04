@@ -12,6 +12,7 @@ import {
   runRecoveryCycle,
   writeOffObligation,
 } from "@/lib/engine";
+import { detectSilentObligations } from "@/lib/silentObligations";
 import { createMerchant, resetDb } from "./helpers";
 
 function razorpayFailedBody(opts: { paymentId: string; obligationId: string; amountPaise: number; errorCode?: string; errorDescription?: string }) {
@@ -919,7 +920,7 @@ describe("AI-vs-rules baseline recording (PRD Problem 37)", () => {
     const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_BASELINE_2", amountPaise: 100000 });
     const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "OPEN", recoveryAttempts: 1, messagesSent: 0 } });
     await db.paymentAttempt.create({
-      data: { obligationId: obligation.id, provider: "razorpay", providerPaymentId: "pay_baseline_2", amountPaise: 100000, status: "FAILED", failureCategory: "USER_DROPOFF" },
+      data: { obligationId: obligation.id, provider: "razorpay", providerPaymentId: "pay_baseline_2", amountPaise: 100000, status: "FAILED", failureCategory: "UNKNOWN" },
     });
 
     await runRecoveryCycle(obligation.id);
@@ -1160,5 +1161,117 @@ describe("combined detection signals — outage and fraud on the same obligation
     // and fraud wins the actual blocking decision.
     expect(lastAction.policyResult).toBe("BLOCKED");
     expect(lastAction.policyReasoning).toMatch(/fraud/i);
+  });
+});
+
+describe("silent obligations — checkout drop-off and overdue B2B receivables never produce a provider event", () => {
+  it("detects and recovers an abandoned checkout with zero payment attempts", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_SILENT_CHECKOUT", amountPaise: 100000 });
+    // Backdate creation past the 30-minute abandonment threshold — a
+    // fresh checkout must never be flagged as abandoned.
+    await db.paymentObligation.update({ where: { id: obligation.id }, data: { createdAt: new Date(Date.now() - 45 * 60 * 1000) } });
+
+    const result = await detectSilentObligations(merchant.id);
+    expect(result.triggered).toBe(1);
+
+    const attempt = await db.paymentAttempt.findFirstOrThrow({ where: { obligationId: obligation.id } });
+    expect(attempt.failureCategory).toBe("USER_DROPOFF");
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(action.actionType).toBe("GENERATE_PAYMENT_LINK");
+  });
+
+  it("does not flag a checkout that hasn't gone stale yet", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_SILENT_FRESH", amountPaise: 100000 });
+
+    const result = await detectSilentObligations(merchant.id);
+    expect(result.triggered).toBe(0);
+    expect(await db.paymentAttempt.count({ where: { obligationId: obligation.id } })).toBe(0);
+  });
+
+  it("detects an overdue B2B invoice with zero payment attempts and sends a first reminder", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({
+      merchantId: merchant.id,
+      referenceType: "INVOICE",
+      referenceId: "INVOICE_SILENT_1",
+      amountPaise: 500000,
+      dueDate: new Date(Date.now() - 24 * 3_600_000), // due yesterday
+    });
+
+    const result = await detectSilentObligations(merchant.id);
+    expect(result.triggered).toBe(1);
+
+    const attempt = await db.paymentAttempt.findFirstOrThrow({ where: { obligationId: obligation.id } });
+    expect(attempt.failureCategory).toBe("RECEIVABLE_OVERDUE");
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(action.actionType).toBe("SEND_REMINDER");
+  });
+
+  it("does not flag an invoice that isn't due yet", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({
+      merchantId: merchant.id,
+      referenceType: "INVOICE",
+      referenceId: "INVOICE_SILENT_FUTURE",
+      amountPaise: 500000,
+      dueDate: new Date(Date.now() + 24 * 3_600_000), // due tomorrow
+    });
+
+    const result = await detectSilentObligations(merchant.id);
+    expect(result.triggered).toBe(0);
+    expect(await db.paymentAttempt.count({ where: { obligationId: obligation.id } })).toBe(0);
+  });
+
+  it("escalates an unanswered overdue-invoice reminder to a human instead of continuing to auto-message", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({
+      merchantId: merchant.id,
+      referenceType: "INVOICE",
+      referenceId: "INVOICE_SILENT_ESCALATE",
+      amountPaise: 500000,
+      dueDate: new Date(Date.now() - 24 * 3_600_000),
+    });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "OPEN", messagesSent: 1 } });
+    await db.paymentAttempt.create({
+      data: { obligationId: obligation.id, provider: "external", amountPaise: 500000, status: "FAILED", failureCategory: "RECEIVABLE_OVERDUE" },
+    });
+
+    await runRecoveryCycle(obligation.id);
+
+    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(action.actionType).toBe("ESCALATE_TO_HUMAN");
+    expect(action.reason).toMatch(/collections/i);
+  });
+
+  it("never touches an obligation that already has a real payment attempt on record", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_SILENT_HAS_ATTEMPT", amountPaise: 100000 });
+    await db.paymentObligation.update({ where: { id: obligation.id }, data: { createdAt: new Date(Date.now() - 45 * 60 * 1000) } });
+    await db.paymentAttempt.create({
+      data: { obligationId: obligation.id, provider: "razorpay", providerPaymentId: "pay_real", amountPaise: 100000, status: "FAILED", failureCategory: "GATEWAY_ERROR" },
+    });
+
+    const result = await detectSilentObligations(merchant.id);
+    expect(result.triggered).toBe(0);
+    expect(await db.paymentAttempt.count({ where: { obligationId: obligation.id } })).toBe(1);
+  });
+
+  it("is scoped per merchant when a merchantId is passed", async () => {
+    const merchantA = await createMerchant();
+    const merchantB = await createMerchant();
+    const obligationA = await createObligation({ merchantId: merchantA.id, referenceType: "ORDER", referenceId: "ORDER_SILENT_TENANT_A", amountPaise: 100000 });
+    const obligationB = await createObligation({ merchantId: merchantB.id, referenceType: "ORDER", referenceId: "ORDER_SILENT_TENANT_B", amountPaise: 100000 });
+    await db.paymentObligation.update({ where: { id: obligationA.id }, data: { createdAt: new Date(Date.now() - 45 * 60 * 1000) } });
+    await db.paymentObligation.update({ where: { id: obligationB.id }, data: { createdAt: new Date(Date.now() - 45 * 60 * 1000) } });
+
+    const result = await detectSilentObligations(merchantA.id);
+    expect(result.triggered).toBe(1);
+    expect(await db.paymentAttempt.count({ where: { obligationId: obligationB.id } })).toBe(0);
   });
 });
