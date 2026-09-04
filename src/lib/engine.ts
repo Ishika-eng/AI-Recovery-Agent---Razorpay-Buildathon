@@ -339,6 +339,26 @@ export async function resolveObligation(
   // amount only matters for telling partial/over/full apart below.
   const paidAmount = options?.amountPaise ?? obligation.outstandingAmountPaise;
 
+  // Defensive boundary: UniversalPaymentEvent's zod schema declares
+  // amountPaise as positive, but provider adapters build that object as a
+  // plain TypeScript literal — it is never actually run through
+  // `.parse()`, so a malformed or buggy provider payload (a zero or
+  // negative amount) would otherwise flow straight through here. A
+  // non-positive "payment" is a data problem, not a real transaction —
+  // treat it as untrustworthy and leave the obligation exactly as it was,
+  // the same "don't guess" posture used for unmatched refund/dispute
+  // correlation elsewhere in this file.
+  if (paidAmount <= 0) {
+    await audit(
+      obligation.merchantId,
+      "SYSTEM",
+      "INVALID_PAYMENT_AMOUNT",
+      `Ignored a non-positive payment amount (₹${(paidAmount / 100).toFixed(2)}) reported via ${source} (${paymentReference}) for obligation ${obligation.referenceId} — likely a malformed event; outstanding balance left unchanged.`,
+      { obligationId, source, paymentReference, paidAmount }
+    );
+    return obligation;
+  }
+
   // PRD Problem 24/25: a payment doesn't have to match what's owed exactly.
   // Less than outstanding → obligation stays open for the remainder, case
   // keeps working it. More than outstanding → still fully resolved, but the
@@ -346,10 +366,23 @@ export async function resolveObligation(
   // revenue (could be a duplicate payment, a tip, a pricing error...).
   if (paidAmount < obligation.outstandingAmountPaise) {
     const newOutstanding = obligation.outstandingAmountPaise - paidAmount;
-    const updated = await db.paymentObligation.update({
-      where: { id: obligationId },
+    // Optimistic concurrency guard: only apply this transition if the
+    // status is still exactly what we read above. Two payments racing for
+    // the same obligation (e.g. a duplicate webhook redelivery arriving
+    // concurrently with a real one) would otherwise both pass the
+    // `findUniqueOrThrow` read before either had written, both compute a
+    // newOutstanding from the same stale value, and double up on the
+    // audit entry / attribution credit below. If another call already won
+    // this race, `count` is 0 and this call backs off instead of
+    // continuing as if it were the one that made the update.
+    const { count } = await db.paymentObligation.updateMany({
+      where: { id: obligationId, status: obligation.status },
       data: { status: "PARTIALLY_PAID", outstandingAmountPaise: newOutstanding },
     });
+    if (count === 0) {
+      return db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
+    }
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
 
     if (attributedActionId) {
       await db.recoveryAction.update({
@@ -371,8 +404,16 @@ export async function resolveObligation(
 
   const excessPaidAmountPaise = Math.max(0, paidAmount - obligation.outstandingAmountPaise);
 
-  const updated = await db.paymentObligation.update({
-    where: { id: obligationId },
+  // Same optimistic concurrency guard as the partial-payment branch above
+  // — this is the transition my own "two payments race for the same
+  // obligation" test exists to catch: without it, two concurrent
+  // successful payments (a duplicate webhook, or a real payment racing an
+  // external "paid elsewhere" report) could both read status != PAID,
+  // both perform this update, and both run the audit/attribution/case-
+  // closing logic below — double-crediting an action's recoveredPaise and
+  // writing two OBLIGATION_RESOLVED audit entries for one payment.
+  const { count } = await db.paymentObligation.updateMany({
+    where: { id: obligationId, status: obligation.status },
     data: {
       status: "PAID",
       outstandingAmountPaise: 0,
@@ -381,6 +422,10 @@ export async function resolveObligation(
       resolutionSource: source,
     },
   });
+  if (count === 0) {
+    return db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
+  }
+  const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
 
   // Attribution (PRD Problem 7): only ever credit an action when the
   // caller traced this resolution back to something that action actually
@@ -462,6 +507,20 @@ export async function resolveObligation(
 export async function resolveExternalPayment(obligationId: string, reference: string, amountPaise?: number) {
   const obligation = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
   const paidAmount = amountPaise ?? obligation.outstandingAmountPaise;
+
+  // A non-positive amount is a data problem, not a real payment — don't
+  // even record an attempt for it (resolveObligation guards this too, but
+  // there's no reason to leave a nonsensical PaymentAttempt row behind).
+  if (paidAmount <= 0) {
+    await audit(
+      obligation.merchantId,
+      "SYSTEM",
+      "INVALID_PAYMENT_AMOUNT",
+      `Ignored a non-positive external payment amount (₹${(paidAmount / 100).toFixed(2)}) reported for obligation ${obligation.referenceId} (reference: ${reference}) — outstanding balance left unchanged.`,
+      { obligationId, reference, paidAmount }
+    );
+    return obligation;
+  }
 
   await db.paymentAttempt.create({
     data: {
