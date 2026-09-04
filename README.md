@@ -414,12 +414,36 @@ outage detection specifically has a test proving one merchant's failures
 can't trigger a false outage flag on a different merchant sharing the
 same provider.
 
-**Not covered by any test**: concurrent/race-condition webhook delivery
-(two events for the same obligation landing at once), multiple detection
-signals firing together on one obligation (e.g. mid-outage *and* over the
-fraud threshold simultaneously), and negative/zero-amount inputs on the
-partial-payment paths. These are plausible in production but out of
-scope for what this session verified.
+Three further edge cases are covered, one of which turned up a real bug:
+
+- **Negative/zero-amount payments.** `UniversalPaymentEvent`'s zod schema
+  declares `amountPaise` positive, but provider adapters build that object
+  as a plain TypeScript literal that's never actually run through
+  `.parse()` — so a malformed provider payload could reach
+  `resolveObligation` with a zero or negative amount. It's now guarded
+  explicitly: a non-positive amount is logged as `INVALID_PAYMENT_AMOUNT`
+  and the obligation is left untouched, rather than silently reducing (or
+  worse, *increasing*) the outstanding balance.
+- **Two payments racing for the same obligation.** Writing this test
+  (`Promise.all` of two concurrent successful payments for one
+  obligation) actually caught a real, pre-existing TOCTOU race in
+  `resolveObligation`: both calls could read `status != PAID` before
+  either had written, and both would proceed to resolve — double-crediting
+  attribution and writing two `OBLIGATION_RESOLVED` audit entries for a
+  single payment. Confirmed with 8 consecutive failing runs before the
+  fix, then 15 consecutive clean runs after it. Fixed with an optimistic
+  concurrency guard: the status-changing update is now conditioned on the
+  status still matching what was originally read (`updateMany` with a
+  `status` filter, checked via the affected row count) — the loser of the
+  race backs off and returns the current state instead of repeating the
+  resolution side effects.
+- **Both detectors firing on the same obligation at once.** A case that's
+  simultaneously part of a suspected provider outage *and* over the fraud
+  velocity threshold is blocked on fraud grounds — the Policy Engine's
+  `FRAUD_SUSPECTED` check is unconditional, so it wins regardless of what
+  the AI's own (outage-driven) reasoning says. Neither signal is silently
+  dropped from the audit trail; only the blocking decision is decided in
+  fraud's favor.
 
 ## Known limitations
 
