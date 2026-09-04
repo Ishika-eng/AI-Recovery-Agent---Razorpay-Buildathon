@@ -324,6 +324,38 @@ from the provider payload. This means an obligation actually stored as
 above is fully covered by unit tests (`tests/ai.test.ts`) but not yet
 exercised by a live Razorpay/Stripe webhook end to end.
 
+## Provider-outage detection — a systemic failure isn't this customer's problem
+
+A timeout or gateway error from a single obligation's point of view looks
+exactly like "try again shortly," which is what the AI already does for a
+transient failure. But if the *same* provider produces that *same*
+transient failure across several *different* obligations within a short
+window at once, that isn't several independent card problems — it's the
+provider itself being down, and nudging each affected customer ("please
+retry") is actively misleading when nothing on their end is wrong.
+
+`detectProviderOutage()` (`src/lib/outage.ts`) checks, per provider, per
+merchant: how many *distinct* obligations hit a transient failure
+(`TIMEOUT`, `NETWORK_ERROR`, or `GATEWAY_ERROR`) on that provider in the
+last 15 minutes. At 3+ distinct obligations, an outage is suspected, and
+`runRecoveryCycle` threads that into the AI's context as `providerHealth`.
+The AI then:
+
+- **Waits twice as long** as the usual customer-value-calibrated window
+  before doing anything customer-facing, instead of retrying on the normal
+  schedule.
+- **Escalates to a human** rather than waiting a second time or contacting
+  the customer, if the suspected outage is still ongoing after that
+  extended wait — automation shouldn't hold a case in limbo forever.
+- **Never suppresses a genuine instrument problem** — a hard decline or an
+  expired card is handled exactly as it would be otherwise, regardless of
+  what else is happening to the provider, since that failure has nothing
+  to do with the provider's health.
+
+The dashboard surfaces this as an amber banner ("Possible provider outage
+detected...") whenever a recent AI decision cited a suspected outage,
+rather than leaving it buried in the audit trail.
+
 ## Testing
 
 ```bash
@@ -340,14 +372,15 @@ end to end.
 ## Known limitations
 
 The PRD's "real-world problems" checklist is broader than what's wired up
-end to end. **Refunds**, **partial payments/overpayment**, and **payment-
-method lifecycle** (expired cards) are now handled (see "Refunds and
-chargebacks", "Partial payment and overpayment", and "Payment-method
-lifecycle" above — the last has one known gap around subscription
-correlation, noted in that section). There's no provider-outage anomaly
-detection, no fraud/suspicious-pattern detection, and outbound
-provider/merchant API calls aren't modeled (everything is webhook-driven),
-so failure handling for those calls doesn't apply yet.
+end to end. **Refunds**, **partial payments/overpayment**, **payment-
+method lifecycle** (expired cards), and **provider-outage detection** are
+now handled (see "Refunds and chargebacks", "Partial payment and
+overpayment", "Payment-method lifecycle", and "Provider-outage detection"
+above — the payment-method lifecycle section has one known gap around
+subscription correlation, noted there). There's no fraud/suspicious-
+pattern detection, and outbound provider/merchant API calls aren't
+modeled (everything is webhook-driven), so failure handling for those
+calls doesn't apply yet.
 
 **Dispute holds** and **customer opt-out** are no longer guardrails
 without a trigger:
