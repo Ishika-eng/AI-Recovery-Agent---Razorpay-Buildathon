@@ -21,9 +21,16 @@ function context(overrides: {
   messagesSent?: number;
   waitedAlready?: boolean;
   failureCategory?: RecoveryCaseContext["paymentHistory"][number]["failureCategory"];
+  referenceType?: string;
 }): RecoveryCaseContext {
   return {
-    obligation: { id: "obl_1", amountPaise: 500000, outstandingAmountPaise: 500000, status: "UNPAID" },
+    obligation: {
+      id: "obl_1",
+      referenceType: overrides.referenceType ?? "ORDER",
+      amountPaise: 500000,
+      outstandingAmountPaise: 500000,
+      status: "UNPAID",
+    },
     customer: {
       relationshipAgeDays: overrides.relationshipAgeDays ?? 0,
       successfulPayments: overrides.successfulPayments ?? 0,
@@ -89,5 +96,42 @@ describe("decideRecoveryAction — calibrated to customer value", () => {
     );
     expect(decision.reason).toMatch(/high-value/i);
     expect(decision.reason).toMatch(/365-day/);
+  });
+});
+
+describe("decideRecoveryAction — payment-method lifecycle (PRD Problem 28)", () => {
+  it("offers a genuinely different payment method on an expired card, not a plain retry link", () => {
+    const decision = decideRecoveryAction(context({ customerValue: "STANDARD", failureCategory: "EXPIRED_CARD" }));
+    expect(decision.action).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
+    expect(decision.reason).toMatch(/expired/i);
+  });
+
+  it("ignores customer value for an expired card — the instrument is dead regardless of who owns it", () => {
+    const highValue = decideRecoveryAction(context({ customerValue: "HIGH", failureCategory: "EXPIRED_CARD" }));
+    const lowValue = decideRecoveryAction(context({ customerValue: "LOW", failureCategory: "EXPIRED_CARD" }));
+    expect(highValue.action).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
+    expect(lowValue.action).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
+  });
+
+  it("escalates a SUBSCRIPTION with an expired card to a human after just one automated attempt", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "LOW", failureCategory: "EXPIRED_CARD", referenceType: "SUBSCRIPTION", messagesSent: 1 })
+    );
+    expect(decision.action).toBe("ESCALATE_TO_HUMAN");
+    expect(decision.reason).toMatch(/renewal/i);
+  });
+
+  it("still tries OFFER_ALTERNATIVE_PAYMENT_METHOD once on a SUBSCRIPTION before escalating", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "LOW", failureCategory: "EXPIRED_CARD", referenceType: "SUBSCRIPTION", messagesSent: 0 })
+    );
+    expect(decision.action).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
+  });
+
+  it("does not escalate a one-off ORDER with an expired card early just because a message was already sent", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "LOW", failureCategory: "EXPIRED_CARD", referenceType: "ORDER", messagesSent: 1 })
+    );
+    expect(decision.action).not.toBe("ESCALATE_TO_HUMAN");
   });
 });
