@@ -887,3 +887,78 @@ describe("AI-vs-rules baseline recording (PRD Problem 37)", () => {
     expect(action.baselineAction).toBe("SEND_REMINDER");
   });
 });
+
+describe("suspected-fraud detection — rapid repeated failed attempts, not a struggling customer (PRD Problem 30)", () => {
+  it("flags suspected fraud and blocks automated recovery once enough failed attempts land on the same obligation", async () => {
+    // Force "not recovered" on every simulated dice roll — otherwise the
+    // very first hard-decline push has a real chance of auto-resolving
+    // the obligation to PAID (55% simulated recovery rate on
+    // GENERATE_PAYMENT_LINK), which short-circuits every later cycle
+    // before it ever reaches the fraud check.
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_FRAUD_1", amountPaise: 100000 });
+
+    for (let i = 0; i < 5; i++) {
+      await pushRazorpayFailure(merchant.id, {
+        paymentId: `pay_fraud_${i}`,
+        obligationId: obligation.referenceId,
+        amountPaise: 100000,
+        errorCode: "CARD_DECLINED",
+        errorDescription: "Card was declined",
+      });
+    }
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.riskLevel).toBe("FRAUD_SUSPECTED");
+
+    const lastAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(lastAction.policyResult).toBe("BLOCKED");
+    expect(lastAction.policyReasoning).toMatch(/fraud/i);
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "SUSPECTED_FRAUD" } });
+    expect(log.reasoning).toMatch(/card testing/i);
+  });
+
+  it("does not flag fraud from a normal handful of retries below the threshold", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_FRAUD_2", amountPaise: 100000 });
+
+    for (let i = 0; i < 2; i++) {
+      await pushRazorpayFailure(merchant.id, {
+        paymentId: `pay_normal_${i}`,
+        obligationId: obligation.referenceId,
+        amountPaise: 100000,
+        errorCode: "GATEWAY_TIMEOUT",
+      });
+    }
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.riskLevel).toBe("STANDARD");
+  });
+
+  it("re-evaluates policy against the case's current risk level, not a stale one, once fraud is suspected mid-cycle", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_FRAUD_3", amountPaise: 100000 });
+
+    for (let i = 0; i < 5; i++) {
+      await pushRazorpayFailure(merchant.id, {
+        paymentId: `pay_fraud3_${i}`,
+        obligationId: obligation.referenceId,
+        amountPaise: 100000,
+        errorCode: "GATEWAY_TIMEOUT",
+      });
+    }
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.riskLevel).toBe("FRAUD_SUSPECTED");
+
+    // A fresh cycle run after the fact must still see FRAUD_SUSPECTED and
+    // block, not fall back to STANDARD guardrails.
+    await runRecoveryCycle(obligation.id);
+    const latestAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(latestAction.policyResult).toBe("BLOCKED");
+  });
+});
