@@ -5,6 +5,7 @@ import {
   approveAction,
   createObligation,
   ingestProviderEvent,
+  optOutCustomer,
   processDueCases,
   rejectAction,
   resolveExternalPayment,
@@ -44,6 +45,21 @@ function stripeSucceededBody(opts: { intentId: string; obligationId: string; amo
 
 async function pushRazorpayFailure(merchantId: string, opts: Parameters<typeof razorpayFailedBody>[0]) {
   return ingestProviderEvent("razorpay", razorpayFailedBody(opts), new Headers(), merchantId);
+}
+
+function razorpayDisputeBody(opts: { disputeId: string; paymentId: string; amountPaise: number }) {
+  return JSON.stringify({
+    event: "payment.dispute.created",
+    payload: {
+      dispute: {
+        entity: { id: opts.disputeId, payment_id: opts.paymentId, amount: opts.amountPaise, currency: "INR" },
+      },
+    },
+  });
+}
+
+async function pushRazorpayDispute(merchantId: string, opts: Parameters<typeof razorpayDisputeBody>[0]) {
+  return ingestProviderEvent("razorpay", razorpayDisputeBody(opts), new Headers(), merchantId);
 }
 
 beforeEach(async () => {
@@ -347,5 +363,106 @@ describe("autonomous scheduling (processDueCases)", () => {
       orderBy: { createdAt: "desc" },
     });
     expect(action.executionStatus).toBe("EXECUTED");
+  });
+});
+
+describe("customer opt-out — the real trigger, not just an unused guardrail", () => {
+  it("stops any future customer-facing proposal once a customer opts out", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_OPTOUT", amountPaise: 100000 });
+    // Transient failure — WAIT executes deterministically (no delivery
+    // attempt, no simulated-outcome dice roll, no auto-chain), so the
+    // obligation and case land in a known state before opting out.
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_1", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.nextAction).toBe("VERIFY_PAYMENT");
+
+    const updated = await optOutCustomer(obligation.id, "test: customer said stop");
+    expect(updated?.contactOptedOut).toBe(true);
+
+    const optOutLog = await db.auditLog.findFirstOrThrow({ where: { action: "CUSTOMER_OPTED_OUT" } });
+    expect(optOutLog.reasoning).toMatch(/opted out/i);
+
+    // A later cycle must not send anything further — the guardrail blocks
+    // it, and doesn't get rescheduled hourly since it's a permanent hold.
+    await runRecoveryCycle(obligation.id);
+    const blocked = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(blocked.executionStatus).toBe("POLICY_BLOCKED");
+    expect(blocked.policyReasoning).toMatch(/opted out/i);
+
+    const caseAfter = await db.recoveryCase.findUniqueOrThrow({ where: { id: recoveryCase.id } });
+    expect(caseAfter.nextActionAt).toBeNull();
+  });
+
+  it("blocks a still-pending approval-queue action retroactively", async () => {
+    const merchant = await createMerchant({ autoApproveUnderPaise: 0 });
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_OPTOUT_PENDING", amountPaise: 100000 });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_1", obligationId: obligation.referenceId, amountPaise: 100000, errorDescription: "Card was declined by the issuing bank" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const pending = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(pending.executionStatus).toBe("PENDING_APPROVAL");
+
+    await optOutCustomer(obligation.id, "test: customer said stop");
+
+    const updated = await db.recoveryAction.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(updated.executionStatus).toBe("POLICY_BLOCKED");
+  });
+});
+
+describe("dispute handling — the real trigger, not just an unused guardrail", () => {
+  it("correlates a dispute to its obligation via the disputed payment id, stops recovery, and escalates", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_DISPUTE", amountPaise: 100000 });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_disputed", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.nextAction).toBe("VERIFY_PAYMENT"); // WAIT scheduled — this is what a dispute must cancel
+
+    const result = await pushRazorpayDispute(merchant.id, { disputeId: "disp_1", paymentId: "pay_disputed", amountPaise: 100000 });
+    expect(result.status).toBe("processed");
+    if (result.status !== "processed") throw new Error("unreachable");
+    expect(result.result).toBe("dispute_opened");
+
+    const updatedCase = await db.recoveryCase.findUniqueOrThrow({ where: { id: recoveryCase.id } });
+    expect(updatedCase.riskLevel).toBe("DISPUTE_ACTIVE");
+    expect(updatedCase.status).toBe("ESCALATED");
+
+    const disputeLog = await db.auditLog.findFirstOrThrow({ where: { action: "DISPUTE_OPENED" } });
+    expect(disputeLog.reasoning).toMatch(/dispute/i);
+
+    // A subsequent trigger must not pressure the customer while it's contested.
+    await runRecoveryCycle(obligation.id);
+    const blocked = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(blocked.executionStatus).toBe("POLICY_BLOCKED");
+    expect(blocked.policyReasoning).toMatch(/dispute/i);
+  });
+
+  it("blocks a still-pending action retroactively when a dispute opens on that obligation", async () => {
+    const merchant = await createMerchant({ autoApproveUnderPaise: 0 });
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_DISPUTE_PENDING", amountPaise: 100000 });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_disputed_2", obligationId: obligation.referenceId, amountPaise: 100000, errorDescription: "Card was declined by the issuing bank" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const pending = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(pending.executionStatus).toBe("PENDING_APPROVAL");
+
+    await pushRazorpayDispute(merchant.id, { disputeId: "disp_2", paymentId: "pay_disputed_2", amountPaise: 100000 });
+
+    const updated = await db.recoveryAction.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(updated.executionStatus).toBe("POLICY_BLOCKED");
+  });
+
+  it("routes to manual review instead of guessing when the disputed payment id has no matching attempt", async () => {
+    const merchant = await createMerchant();
+    const result = await pushRazorpayDispute(merchant.id, { disputeId: "disp_unknown", paymentId: "pay_never_seen", amountPaise: 100000 });
+
+    expect(result.status).toBe("processed");
+    if (result.status !== "processed") throw new Error("unreachable");
+    expect(result.correlated).toBe(false);
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "CORRELATION_FAILED" } });
+    expect(log.reasoning).toMatch(/manual review/i);
   });
 });
