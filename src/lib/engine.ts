@@ -6,6 +6,7 @@ import { decideNaiveBaseline } from "@/lib/baseline";
 import { evaluatePolicy, type PolicyContext } from "@/lib/policy";
 import { deliverAction } from "@/lib/actions";
 import { detectProviderOutage } from "@/lib/outage";
+import { detectSuspiciousVelocity } from "@/lib/fraud";
 import type { UniversalPaymentEvent, ActionType, RecoveryCaseContext, FailureCategory } from "@/lib/types";
 
 async function audit(
@@ -576,6 +577,30 @@ export async function runRecoveryCycle(obligationId: string) {
   const recoveryCase = await ensureRecoveryCase(obligationId);
   if (recoveryCase.status === "RESOLVED" || recoveryCase.status === "CANCELLED") {
     return { skipped: true as const, reason: `case is already ${recoveryCase.status}` };
+  }
+
+  // PRD Problem 30: rapid repeated failed attempts against the *same*
+  // obligation looks like card testing, not a struggling customer — see
+  // src/lib/fraud.ts. Checked fresh every cycle (not just at ingestion),
+  // the same way a cross-channel resolution is caught by the next
+  // re-verification rather than needing a dedicated trigger.
+  const fraudSignal = await detectSuspiciousVelocity(obligationId);
+  if (fraudSignal.suspected && recoveryCase.riskLevel !== "FRAUD_SUSPECTED") {
+    await db.recoveryCase.update({ where: { id: recoveryCase.id }, data: { riskLevel: "FRAUD_SUSPECTED" } });
+    await db.recoveryAction.updateMany({
+      where: { caseId: recoveryCase.id, executionStatus: { in: ["PROPOSED", "PENDING_APPROVAL", "APPROVED"] } },
+      data: { executionStatus: "POLICY_BLOCKED" },
+    });
+    await audit(
+      obligation.merchantId,
+      "SYSTEM",
+      "SUSPECTED_FRAUD",
+      `${fraudSignal.attemptCount} failed payment attempts against this obligation in the last ${fraudSignal.windowMinutes} minutes — this looks like card testing, not a struggling customer. Automated recovery stops until a human reviews.`,
+      { obligationId, caseId: recoveryCase.id, attemptCount: fraudSignal.attemptCount }
+    );
+    // Keep the in-memory value in sync so the policy check just below
+    // sees the update within this same cycle, not only on the next one.
+    recoveryCase.riskLevel = "FRAUD_SUSPECTED";
   }
 
   const [attempts, merchant] = await Promise.all([
