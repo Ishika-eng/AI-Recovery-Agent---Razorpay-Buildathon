@@ -176,9 +176,9 @@ a:active, button:active { transform: scale(.98) !important; }
    demo should lead with, and a smaller compact row for everything else —
    deliberately not all six tiles at the same visual weight, so the eye
    knows what to read first. */
-.stat-tile { position: relative; overflow: hidden; border: 1px solid rgba(132,145,196,.22) !important; background: linear-gradient(145deg, rgba(32,37,62,.92), rgba(14,17,30,.96)) !important; box-shadow: 0 18px 48px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.04); transition: transform .18s, border-color .18s; }
-.stat-tile:before { content: ""; position: absolute; width: 150px; height: 150px; right: -75px; top: -80px; border-radius: 999px; background: radial-gradient(circle, rgba(121,103,255,.2), transparent 70%); pointer-events: none; }
-.stat-tile:hover { transform: translateY(-3px); border-color: rgba(132,121,255,.55) !important; }
+/* The card chrome (border, background, hover glow) now lives on the
+   BorderGlow wrapper around this — .stat-tile is just its padded content. */
+.stat-tile-glow { width: 100%; }
 .stat-tile-label { color: #a7aecb !important; }
 .stat-tile-value { color: #ffffff !important; }
 .stat-tile-lg { padding: 22px !important; }
@@ -187,6 +187,10 @@ a:active, button:active { transform: scale(.98) !important; }
 .stat-tile-sm { padding: 14px 16px !important; }
 .stat-tile-sm .stat-tile-label { font-size: 11px; font-weight: 600; }
 .stat-tile-sm .stat-tile-value { margin-top: 6px; font-size: 18px; letter-spacing: -.01em; }
+
+/* Chart panel cards — also wrapped in BorderGlow now, this is just their
+   padded content area. */
+.chart-card { width: 100%; padding: 16px; }
 
 .dashboard-shell .rounded.border.border-neutral-200.bg-white,
 .dashboard-shell .rounded.border.bg-white,

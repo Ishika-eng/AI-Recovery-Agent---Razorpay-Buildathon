@@ -9,6 +9,7 @@ import GhostFibers from "@/components/GhostFibers";
 import { DashboardSidebarNav } from "@/components/DashboardSidebarNav";
 import { FailureBreakdownChart, ObligationStatusChart, RecoveryBreakdownChart } from "@/components/DashboardCharts";
 import AnimatedList from "@/components/AnimatedList";
+import BorderGlow from "@/components/BorderGlow";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,16 @@ const PROVIDER_LABELS: Record<string, string> = {
   razorpay: "Razorpay",
   stripe: "Stripe",
   external: "External / other channel",
+};
+
+// BorderGlow color scheme matched to the dashboard's existing purple accent
+// (#8f83ff, used throughout stat tiles/charts/sidebar) — glowColor is that
+// same hue as an "H S L" triple, and colors mixes in the blue/teal already
+// used for chart series so the mesh-gradient border reads as one palette.
+const DASHBOARD_GLOW = {
+  backgroundColor: "#141829",
+  glowColor: "246 100 76",
+  colors: ["#8f83ff", "#4d9bff", "#2fd0a4"],
 };
 
 export default async function DashboardPage() {
@@ -288,19 +299,35 @@ export default async function DashboardPage() {
               content: (
                 <div className="space-y-10">
                   <section className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-                    <div className="rounded border border-neutral-200 bg-white p-4">
-                      <h2 className="mb-1 text-base font-semibold">Recovery breakdown</h2>
-                      <p className="mb-2 text-xs text-neutral-500">₹ recovered vs. attributed to AI vs. still at risk</p>
-                      <RecoveryBreakdownChart data={breakdownChartData} />
-                    </div>
-                    <div className="rounded border border-neutral-200 bg-white p-4">
-                      <h2 className="mb-3 text-base font-semibold">Obligations by status</h2>
-                      {statusChartData.length === 0 ? (
-                        <p className="text-sm text-neutral-500">No obligations yet.</p>
-                      ) : (
-                        <ObligationStatusChart data={statusChartData} />
-                      )}
-                    </div>
+                    <BorderGlow
+                      backgroundColor={DASHBOARD_GLOW.backgroundColor}
+                      glowColor={DASHBOARD_GLOW.glowColor}
+                      colors={DASHBOARD_GLOW.colors}
+                      borderRadius={14}
+                      glowRadius={30}
+                    >
+                      <div className="chart-card">
+                        <h2 className="mb-1 text-base font-semibold">Recovery breakdown</h2>
+                        <p className="mb-2 text-xs text-neutral-500">₹ recovered vs. attributed to AI vs. still at risk</p>
+                        <RecoveryBreakdownChart data={breakdownChartData} />
+                      </div>
+                    </BorderGlow>
+                    <BorderGlow
+                      backgroundColor={DASHBOARD_GLOW.backgroundColor}
+                      glowColor={DASHBOARD_GLOW.glowColor}
+                      colors={DASHBOARD_GLOW.colors}
+                      borderRadius={14}
+                      glowRadius={30}
+                    >
+                      <div className="chart-card">
+                        <h2 className="mb-3 text-base font-semibold">Obligations by status</h2>
+                        {statusChartData.length === 0 ? (
+                          <p className="text-sm text-neutral-500">No obligations yet.</p>
+                        ) : (
+                          <ObligationStatusChart data={statusChartData} />
+                        )}
+                      </div>
+                    </BorderGlow>
                   </section>
 
                   <section>
@@ -498,13 +525,21 @@ export default async function DashboardPage() {
                   <section className="grid gap-6 sm:grid-cols-2">
                     <div>
                       <h2 className="mb-3 text-base font-semibold">Failures by category</h2>
-                      <div className="rounded border border-neutral-200 bg-white p-4">
-                        {failureChartData.length === 0 ? (
-                          <p className="text-sm text-neutral-500">No failures recorded.</p>
-                        ) : (
-                          <FailureBreakdownChart data={failureChartData} />
-                        )}
-                      </div>
+                      <BorderGlow
+                        backgroundColor={DASHBOARD_GLOW.backgroundColor}
+                        glowColor={DASHBOARD_GLOW.glowColor}
+                        colors={DASHBOARD_GLOW.colors}
+                        borderRadius={14}
+                        glowRadius={30}
+                      >
+                        <div className="chart-card">
+                          {failureChartData.length === 0 ? (
+                            <p className="text-sm text-neutral-500">No failures recorded.</p>
+                          ) : (
+                            <FailureBreakdownChart data={failureChartData} />
+                          )}
+                        </div>
+                      </BorderGlow>
                     </div>
 
                     <div>
@@ -596,9 +631,20 @@ function StatTile({
   size?: "lg" | "sm";
 }) {
   return (
-    <div className={`stat-tile stat-tile-${size} rounded border border-neutral-200 bg-white p-4`} title={hint}>
-      <div className="stat-tile-label uppercase tracking-wide text-neutral-500">{label}</div>
-      <div className={`stat-tile-value font-semibold ${accent ?? ""}`}>{value}</div>
-    </div>
+    <BorderGlow
+      className="stat-tile-glow"
+      backgroundColor={DASHBOARD_GLOW.backgroundColor}
+      glowColor={DASHBOARD_GLOW.glowColor}
+      colors={DASHBOARD_GLOW.colors}
+      borderRadius={14}
+      glowRadius={26}
+      glowIntensity={1.1}
+      coneSpread={28}
+    >
+      <div className={`stat-tile stat-tile-${size}`} title={hint}>
+        <div className="stat-tile-label uppercase tracking-wide text-neutral-500">{label}</div>
+        <div className={`stat-tile-value font-semibold ${accent ?? ""}`}>{value}</div>
+      </div>
+    </BorderGlow>
   );
 }
