@@ -98,6 +98,10 @@ async function processNormalizedEvent(event: UniversalPaymentEvent) {
     return handleDisputeOpened(event);
   }
 
+  if (event.eventType === "REFUND_ISSUED") {
+    return handleRefundIssued(event);
+  }
+
   // Correlation, Priority 1 (PRD §17): the merchant-owned obligation
   // reference the adapter already extracted from provider metadata. We
   // never fall back to amount+customer matching — if it can't be found,
@@ -154,7 +158,29 @@ async function processNormalizedEvent(event: UniversalPaymentEvent) {
   }
 
   if (event.eventType === "PAYMENT_SUCCEEDED") {
-    await resolveObligation(obligation.id, event.provider, paymentAttempt.providerPaymentId ?? event.providerEventId);
+    // Attribution (PRD Problem 7): only credit a specific RecoveryAction
+    // when we can trace this success back to something *we* generated — a
+    // payment link this platform created. Match it by the link's own id,
+    // which the adapter surfaces only when the success genuinely came
+    // through payment_link.paid. Anything else (a customer retrying
+    // normally, a cross-channel payment) resolves the obligation exactly
+    // as before, but honestly records no attributed action — "resolved,
+    // cause unknown" beats a false claim of causing it.
+    let attributedActionId: string | undefined;
+    if (event.paymentLinkId) {
+      const matchedAction = await db.recoveryAction.findFirst({
+        where: { deliveryRef: event.paymentLinkId, case: { obligationId: obligation.id } },
+        orderBy: { createdAt: "desc" },
+      });
+      attributedActionId = matchedAction?.id;
+    }
+
+    await resolveObligation(
+      obligation.id,
+      event.provider,
+      paymentAttempt.providerPaymentId ?? event.providerEventId,
+      attributedActionId
+    );
     return { correlated: true as const, obligationId: obligation.id, result: "resolved" as const };
   }
 
@@ -220,6 +246,67 @@ async function handleDisputeOpened(event: UniversalPaymentEvent) {
   return { correlated: true as const, obligationId: attempt.obligationId, result: "dispute_opened" as const };
 }
 
+// PRD Problem 26: a payment already counted as recovered can still be
+// refunded or charged back — without this, "₹ recovered" on the dashboard
+// keeps claiming revenue that was actually given back. Correlates the same
+// way disputes do: through the refunded payment's provider id against the
+// PaymentAttempt already on record, since a refund payload doesn't carry
+// the merchant's own obligation reference either. Deliberately does *not*
+// restart recovery — a refund is usually a deliberate business decision
+// (return, cancellation), not something to auto-re-chase.
+async function handleRefundIssued(event: UniversalPaymentEvent) {
+  if (!event.refundedPaymentId) return { correlated: false as const };
+
+  const attempt = await db.paymentAttempt.findFirst({
+    where: {
+      provider: event.provider,
+      providerPaymentId: event.refundedPaymentId,
+      obligation: { merchantId: event.merchantId },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!attempt) {
+    await audit(
+      event.merchantId,
+      "SYSTEM",
+      "CORRELATION_FAILED",
+      `Refund issued for payment "${event.refundedPaymentId}" but no matching payment attempt is on record — routed to manual review.`,
+      { provider: event.provider, refundedPaymentId: event.refundedPaymentId }
+    );
+    return { correlated: false as const };
+  }
+
+  const obligation = await db.paymentObligation.findUniqueOrThrow({ where: { id: attempt.obligationId } });
+  // The provider reports a cumulative refunded total on the payment, not a
+  // delta — set, don't add, so a redelivered or repeated webhook can never
+  // double-count.
+  const refundedAmountPaise = event.refundAmountPaise ?? attempt.amountPaise;
+  const isFullRefund = refundedAmountPaise >= obligation.originalAmountPaise;
+
+  await db.paymentObligation.update({
+    where: { id: obligation.id },
+    data: {
+      refundedAmountPaise,
+      status: isFullRefund ? "REFUNDED" : obligation.status,
+    },
+  });
+
+  await audit(
+    obligation.merchantId,
+    "SYSTEM",
+    "REFUND_ISSUED",
+    `₹${(refundedAmountPaise / 100).toFixed(2)} refunded on payment ${event.refundedPaymentId}${
+      isFullRefund
+        ? " — obligation marked REFUNDED; recovery is not being restarted automatically, and this amount no longer counts toward recovered revenue"
+        : " (partial — outstanding recovered total adjusted accordingly)"
+    }.`,
+    { obligationId: obligation.id, refundedPaymentId: event.refundedPaymentId, refundedAmountPaise, isFullRefund }
+  );
+
+  return { correlated: true as const, obligationId: obligation.id, result: "refund_issued" as const };
+}
+
 // ---------------------------------------------------------------------------
 // Cross-channel resolution — the mandatory feature from PRD §13/§14. The
 // moment ANY channel resolves the obligation, everything scheduled against
@@ -228,7 +315,12 @@ async function handleDisputeOpened(event: UniversalPaymentEvent) {
 // explicitly as a prevented action, not silently dropped.
 // ---------------------------------------------------------------------------
 
-export async function resolveObligation(obligationId: string, source: string, paymentReference: string) {
+export async function resolveObligation(
+  obligationId: string,
+  source: string,
+  paymentReference: string,
+  attributedActionId?: string
+) {
   const obligation = await db.paymentObligation.findUniqueOrThrow({
     where: { id: obligationId },
     include: { recoveryCase: true },
@@ -248,12 +340,25 @@ export async function resolveObligation(obligationId: string, source: string, pa
     },
   });
 
+  // Attribution (PRD Problem 7): only ever credit an action when the
+  // caller traced this resolution back to something that action actually
+  // produced (see the paymentLinkId match in processNormalizedEvent) —
+  // never inferred from "a case existed at the time."
+  if (attributedActionId) {
+    await db.recoveryAction.update({
+      where: { id: attributedActionId },
+      data: { recoveredPaise: obligation.originalAmountPaise },
+    });
+  }
+
   await audit(
     obligation.merchantId,
     "SYSTEM",
     "OBLIGATION_RESOLVED",
-    `Obligation ${obligation.referenceId} resolved via ${source} (${paymentReference}) — ₹${(obligation.originalAmountPaise / 100).toFixed(2)}.`,
-    { obligationId, source, paymentReference }
+    attributedActionId
+      ? `Obligation ${obligation.referenceId} resolved via ${source} (${paymentReference}) — ₹${(obligation.originalAmountPaise / 100).toFixed(2)}, confirmed attributable to a recovery action this platform took.`
+      : `Obligation ${obligation.referenceId} resolved via ${source} (${paymentReference}) — ₹${(obligation.originalAmountPaise / 100).toFixed(2)}. Not attributed to a specific recovery action — the customer may have paid regardless of it.`,
+    { obligationId, source, paymentReference, attributedActionId: attributedActionId ?? null }
   );
 
   const recoveryCase = obligation.recoveryCase;
