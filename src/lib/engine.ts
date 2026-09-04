@@ -4,6 +4,7 @@ import { merchantAdapter } from "@/lib/merchants/genericEcommerce";
 import { decideRecoveryAction } from "@/lib/ai";
 import { evaluatePolicy, type PolicyContext } from "@/lib/policy";
 import { deliverAction } from "@/lib/actions";
+import { detectProviderOutage } from "@/lib/outage";
 import type { UniversalPaymentEvent, ActionType, RecoveryCaseContext, FailureCategory } from "@/lib/types";
 
 async function audit(
@@ -586,6 +587,11 @@ export async function runRecoveryCycle(obligationId: string) {
     : { relationshipAgeDays: 0, successfulPayments: 0, customerValue: "STANDARD" as const };
 
   const failedAttempts = attempts.filter((a) => a.status === "FAILED");
+  const lastFailedAttempt = failedAttempts[failedAttempts.length - 1];
+  const providerHealth = lastFailedAttempt
+    ? await detectProviderOutage(obligation.merchantId, lastFailedAttempt.provider)
+    : { suspectedOutage: false, affectedObligations: 0, windowMinutes: 0 };
+
   const context: RecoveryCaseContext = {
     obligation: {
       id: obligation.id,
@@ -606,6 +612,7 @@ export async function runRecoveryCycle(obligationId: string) {
       waitedAlready: false, // set below
       lastActionAt: null, // set below
     },
+    providerHealth,
     allowedActions: merchantAdapter.getAvailableRecoveryActions(),
   };
 
