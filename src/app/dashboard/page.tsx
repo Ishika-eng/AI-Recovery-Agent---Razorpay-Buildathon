@@ -275,7 +275,22 @@ export default async function DashboardPage() {
                         <td className="px-4 py-3 font-medium">{c.obligation.referenceId}</td>
                         <td className="px-4 py-3">{formatPaise(c.obligation.outstandingAmountPaise)}</td>
                         <td className="px-4 py-3">{providers.map((p) => PROVIDER_LABELS[p] ?? p).join(", ")}</td>
-                        <td className="px-4 py-3">{c.status}</td>
+                        <td className="px-4 py-3">
+                          <span className="inline-flex items-center gap-1.5">
+                            {c.status}
+                            {c.riskLevel === "FRAUD_SUSPECTED" && (
+                              <span
+                                className="rounded px-1.5 py-0.5 text-xs font-medium bg-red-100 text-red-700"
+                                title="Rapid repeated failed attempts against this obligation — automated recovery is paused pending human review"
+                              >
+                                Suspected fraud
+                              </span>
+                            )}
+                            {c.riskLevel === "DISPUTE_ACTIVE" && (
+                              <span className="rounded px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700">Dispute</span>
+                            )}
+                          </span>
+                        </td>
                         <td className="px-4 py-3 text-neutral-600">{c.nextAction ? ACTION_LABELS[c.nextAction] ?? c.nextAction : "—"}</td>
                         <td className="px-4 py-3">
                           <CaseControls caseId={c.id} obligationId={c.obligationId} />
