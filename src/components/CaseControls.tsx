@@ -3,11 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-// Demo controls for an open/waiting recovery case: manually "advance" the
-// state machine (stands in for the scheduler that would fire WAIT/follow-up
-// timers in production), or simulate the customer paying through a channel
-// this platform has no dedicated webhook for — the interaction that
-// triggers cross-channel resolution (PRD §13/§14) live.
+// Controls for an open/waiting recovery case: "Advance" forces this one case
+// forward right now instead of waiting for the scheduler (see
+// /api/cron/tick — that's what actually fires WAIT/follow-up timers on
+// their own in the background). "Simulate paid elsewhere" stands in for the
+// customer completing payment through a channel this platform has no
+// dedicated webhook for — the interaction that triggers cross-channel
+// resolution live.
 export function CaseControls({ caseId, obligationId }: { caseId: string; obligationId: string }) {
   const router = useRouter();
   const [pending, setPending] = useState<"advance" | "external" | null>(null);
@@ -42,7 +44,7 @@ export function CaseControls({ caseId, obligationId }: { caseId: string; obligat
         onClick={advance}
         disabled={pending !== null}
         className="rounded border border-neutral-300 bg-white px-3 py-1 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
-        title="Advance the recovery state machine (simulates the scheduled check firing)"
+        title="Force this case forward now, instead of waiting for the scheduler"
       >
         {pending === "advance" ? "Advancing…" : "Advance"}
       </button>
