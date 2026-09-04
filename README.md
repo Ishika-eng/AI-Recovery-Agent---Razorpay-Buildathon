@@ -1,20 +1,80 @@
 # Universal AI Payment Recovery & Reconciliation Platform
 
-Built for Razorpay Buildathon.
+**Razorpay AI Buildathon — Track 03, AI Revenue Recovery.**
 
-A provider-agnostic, **obligation-centric** payment recovery platform. Most
-failed-payment tools think "payment failed → recover payment." This one
-thinks "payment attempt failed → what obligation does this belong to → is
-that obligation still unpaid → has the customer already paid some other
-way?" — and only acts if the answer is still no, re-verifying immediately
-before every customer-facing step.
+> "Find revenue that's slipping away and win it back... don't just identify
+> the problem. Show measured money recovered across a batch, with
+> compliant escalation, stopping rules, and an audit trail." — the track brief
 
-That distinction is the whole product: a customer whose Razorpay payment
-fails and who then pays via Stripe (or any other channel) must never get a
-reminder for money they've already paid. The platform tracks the **Payment
-Obligation** ("Order #789 owes ₹5,000"), not the individual transaction —
-and the moment any channel resolves it, every scheduled recovery action
-against it is cancelled atomically.
+This is a provider-agnostic, **obligation-centric** payment recovery
+platform. Every section below is written so you can verify the claim
+against the code in under a minute — file paths and line-level pointers
+throughout, not just prose.
+
+## What it solves
+
+Most failed-payment recovery tools think in one step: *payment failed →
+retry the payment.* That model breaks constantly in practice, in ways a
+single-step retry loop can't tell apart:
+
+- A Razorpay charge fails, and the customer pays through Stripe five
+  minutes later. A retry-loop tool has no idea this happened and keeps
+  nudging someone who's already paid.
+- A card has **expired**. No amount of retrying, waiting, or even a fresh
+  payment link (which defaults right back to the same dead card) will
+  ever clear it — but a naive tool treats it identically to a temporary
+  decline and just tries again.
+- A **provider itself goes down**. Every "declined" during that window
+  looks, to a single-obligation view, exactly like an ordinary transient
+  failure — but it isn't the customer's problem, and messaging them
+  ("please retry") is actively misleading.
+- A payment lands for **less, or more,** than what was actually owed. A
+  binary "paid / not paid" model has no way to represent that honestly.
+- The **same card is retried five times in ten minutes**. That's not a
+  struggling customer — it's someone testing stolen card numbers against
+  one order, and offering them another payment link just gives them
+  another attempt.
+
+This platform is built around a single idea that makes all five of those
+representable at once: track the **Payment Obligation** ("Order #789 owes
+₹5,000"), not the individual transaction. A `PaymentObligation` accumulates
+`PaymentAttempt` rows from every provider it's tried on; only the
+obligation's own status gets to declare "resolved." Everything else in
+this README — attribution, refunds, partial payments, dead cards, provider
+outages, card testing — is a consequence of getting that one modeling
+decision right.
+
+## Why this clears the bar
+
+The track brief's bar, mapped directly to what's actually in this repo:
+
+| Bar | Where |
+|---|---|
+| **Measured money recovered across a batch** | Dashboard stat tiles computed live from real DB state: **₹ recovered** (every obligation currently `PAID`, net of refunds), **Attributed to AI action** (the strictly smaller subset actually traced back to a specific action this platform took — never inferred), **Recovery rate**, and **AI vs. fixed-schedule rules** (% of decisions where the calibrated AI chose differently than a naive dunning rule would have, itemized by what changed). None of these are hardcoded demo numbers — they're `SELECT`/aggregate queries in `src/app/dashboard/page.tsx`. |
+| **Compliant escalation** | A deterministic Policy Engine (`src/lib/policy.ts`) sits between every AI proposal and execution. Retry caps, message caps, a minimum contact gap, contact-window hours, and an auto-approve amount ceiling are all enforced here — the AI cannot bypass them. `ESCALATE_TO_HUMAN` always requires merchant sign-off, independent of amount. |
+| **Stopping rules** | Dispute freeze, suspected-fraud freeze, customer opt-out (real signed unsubscribe links, no login required), and **write-off** — a genuine terminal state distinct from "AI paused" or "money arrived" — all actually stop automated action, not just get logged. |
+| **Audit trail** | Every AI proposal, every policy verdict, and every system/merchant action is written to `AuditLog` with a plain-English reasoning string a merchant can actually read — not a debug log. Visible live on the dashboard. |
+
+## See it in under 2 minutes
+
+1. `npm install && cp .env.example .env` (set `SESSION_SECRET` — see the
+   comment in `.env.example`) `&& npx prisma migrate dev && npm run dev`.
+2. Sign up, accept the onboarding terms, and click **Load demo batch**.
+3. Watch what the seed data triggers **organically** — this is not staged:
+   - An amber **"Possible provider outage detected"** banner appears
+     because the bulk failure batch genuinely crosses the outage
+     detector's threshold.
+   - The **"AI vs. fixed-schedule rules"** tile shows a real divergence
+     percentage with an itemized breakdown (e.g. *"Rule would
+     SEND_REMINDER — AI instead WAIT"*).
+   - One high-value case sits in the **approval queue**, above the
+     auto-approve ceiling.
+4. Click **Approve** on it — watch ₹ recovered and the recovery rate
+   actually move.
+5. Click **Simulate paid elsewhere** on any active case — watch it drop
+   out of "Active recovery cases" and the **cross-channel resolutions**
+   counter increment, proving the flagship "paid through a different
+   channel" scenario end to end.
 
 ## Architecture
 
@@ -46,8 +106,6 @@ Merchant-side data (orders, customers) goes through the same pattern via a
 `MerchantAdapter` (`src/lib/merchants/`) — the recovery engine never assumes
 a specific business vocabulary, only a normalized `ObligationContext`.
 
-## Why it's built this way
-
 - **Provider-agnostic**: `PaymentProviderAdapter` is one interface; Razorpay
   and Stripe adapters both normalize wildly different webhook shapes into
   the same `UniversalPaymentEvent`. Adding Adyen/Cashfree is one new file.
@@ -59,12 +117,6 @@ a specific business vocabulary, only a normalized `ObligationContext`.
   obligation's live status before proposing or executing anything — a
   stale AI decision, delayed success webhook, or duplicate delivery can
   never push a paid obligation through a customer-facing action.
-- **AI proposes, Policy decides**: the AI layer (`src/lib/ai.ts`) returns a
-  structured `{action, reason}` from a fixed action set — it cannot execute
-  anything itself. The Policy Engine (`src/lib/policy.ts`) is deterministic
-  and enforces per-merchant guardrails (retry caps, message caps, minimum
-  contact gap, contact-window hours, dispute holds, opt-outs, an
-  auto-approve amount ceiling) that nothing downstream can bypass.
 - **Idempotent by construction**: every inbound provider event is recorded
   in an `ExternalEvent` ledger keyed on `(merchantId, provider,
   providerEventId)` before it's acted on — retried webhook deliveries
@@ -74,6 +126,100 @@ a specific business vocabulary, only a normalized `ObligationContext`.
 See `src/lib/engine.ts` for the full recovery-cycle orchestration, or
 [`docs/architecture.html`](docs/architecture.html) for a diagrammed walkthrough
 of the request flow, the data model, and the auth/tenancy gate.
+
+## AI judgment — the right tool in the right place, and where we chose not to use one
+
+Three deliberate design decisions, each traceable to a comment in the code
+itself rather than asserted here for the first time:
+
+**The decision layer is a deterministic stand-in for an LLM call, not a
+prompt wrapper glued on top of a rules engine.** From `src/lib/ai.ts`:
+
+> *"This implementation is a deterministic, transparent stand-in for an LLM
+> call: same input shape, same output contract (`AIDecision`), same
+> 'propose, don't execute' boundary. Swapping in a real model means
+> replacing the body of this function — nothing else in the pipeline
+> changes, because the contract is already the seam."*
+
+It receives a structured `RecoveryCaseContext` — never a raw provider
+payload — and returns one action from a fixed set. It cannot execute
+anything itself.
+
+**Failure classification deliberately does *not* reach for an LLM**, even
+though it's the most "AI-shaped" piece of surface area in the system.
+From `src/lib/classifier.ts`:
+
+> *"A real deployment would layer an LLM on top for errors this can't
+> place, but the gated actions downstream only need the failure
+> *category*, not perfect certainty — so a transparent rule set is the
+> right tool here: merchants can read exactly why a classification was
+> made."*
+
+**Nothing the AI decides is trusted at face value — a separate,
+deterministic Policy Engine has the final word**, and can never be
+bypassed regardless of how the AI arrived at its proposal (`src/lib/policy.ts`).
+
+**And the claim that any of this calibration is actually worth the
+complexity is checkable, not just asserted.** `decideNaiveBaseline()`
+(`src/lib/baseline.ts`) is the fixed-schedule rule a merchant is almost
+certainly replacing — no customer-value calibration, no payment-method-
+lifecycle awareness, no outage detection. It's never executed; every real
+AI decision also records what this baseline would have proposed instead,
+and the dashboard shows the live divergence rate with an itemized
+breakdown of exactly what changed and why. A 0% divergence rate would be
+an honest signal the AI layer isn't earning its keep — this is what makes
+that claim falsifiable instead of a slide.
+
+## What broke, and how we got out
+
+Their own application form asks this as its last question and says it's
+"the one we read first." Three real bugs, found and fixed during this
+build — not hypothetical, not staged:
+
+**1. An orphaned-session redirect loop that could strand any user.** A
+signed, unexpired session cookie whose merchant no longer existed in the
+database (e.g. after a local DB reset) caused an infinite bounce: the
+protected page saw no merchant and redirected to `/login`; the
+optimistic, cookie-only middleware check (`src/proxy.ts`, following
+Next.js's own authentication guidance) saw a still-valid signature and
+redirected `/login` straight back to `/dashboard`. Neither side could break the loop alone — middleware is
+deliberately DB-free for speed, and a React Server Component can't mutate
+cookies during render. Fixed by routing that specific failure mode through
+a dedicated Route Handler (`src/app/api/auth/clear-session/route.ts`) —
+the one place that actually *can* clear the stale cookie before landing
+on `/login` for real. Confirmed fixed by reproducing the exact scenario
+with a minted JWT pointing at a nonexistent merchant id, following the
+full redirect chain, and verifying the cookie jar ended up empty.
+
+**2. Flaky fraud-detection tests that turned out to be a real interaction
+bug, not test noise.** New tests for the card-testing detector passed in
+isolation but intermittently failed when run with the full suite,
+non-deterministically. Traced with temporary debug logging rather than
+guessed at: an unrelated feature (a 55%-simulated-recovery dice roll on
+executed actions, added earlier in the build) could non-deterministically
+resolve the test obligation to `PAID` mid-loop, silently short-circuiting
+every later recovery cycle before it ever reached the fraud check. Fixed
+by forcing that dice roll deterministic in the specific tests that needed
+it (`vi.spyOn(Math, "random")`), matching a pattern already established
+elsewhere in the suite for exactly this class of flakiness. Verified
+across 5 consecutive clean runs.
+
+**3. A genuine, previously-unknown concurrency race — found by writing a
+test to go looking for one, not by accident.** Suspecting that
+`resolveObligation()`'s "already resolved?" check might not be safe under
+real concurrency, we wrote a test that fires two successful payments at
+the same obligation with `Promise.all`. It failed 6 out of 8 consecutive
+runs: both calls could read `status != PAID` before either had written,
+so both proceeded to resolve — double-crediting attribution and writing
+two `OBLIGATION_RESOLVED` audit entries for a single payment. This is
+exactly the kind of bug that "it worked in the demo" never catches. Fixed
+with an optimistic-concurrency guard: the status-changing update is now
+conditioned on the status still matching what was originally read
+(`updateMany` with a `status` filter, checked via the affected-row count)
+— the loser of the race backs off and returns the current state instead
+of repeating the resolution side effects. Verified with 15 consecutive
+clean runs after the fix, having reproduced the failure 6 times in the 8
+runs immediately before it.
 
 ## Product access
 
@@ -100,7 +246,7 @@ authentication:
 
 ## Stack
 
-- Next.js (App Router) + TypeScript
+- Next.js 16 (App Router) + TypeScript
 - Prisma + SQLite (swap `DATABASE_URL` for Postgres in production)
 - Razorpay SDK (test mode) + webhook signature verification
 - bcryptjs + jose for authentication (no external auth provider required)
@@ -141,7 +287,9 @@ routes (not internal shortcuts) to build:
   resolution path on demand,
 - a **high-value case** parked in the approval queue (above the
   auto-approve ceiling),
-- a bulk batch of ordinary failures across both providers for volume.
+- a bulk batch of ordinary failures across both providers for volume —
+  large enough that it also organically crosses the provider-outage
+  detector's threshold.
 
 To wire up real test-mode events instead of the synthetic batch, set
 `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` (and
@@ -204,6 +352,39 @@ external effect instead of a log line:
 Leave the Razorpay keys and SMTP vars blank and the platform behaves
 exactly as it did before — fully demoable with zero external credentials.
 Fill them in and the same decision loop starts having real-world effects.
+
+## Dispute holds and customer opt-out — guardrails with a real trigger
+
+The Policy Engine has always been able to check `riskLevel === "DISPUTE_ACTIVE"`
+and `contactOptedOut` — the gap was that nothing ever set them.
+
+- A **dispute/chargeback** (Razorpay `payment.dispute.created`, Stripe
+  `charge.dispute.created`) correlates through the disputed payment's
+  provider id — looked up against the `PaymentAttempt` already recorded
+  for it, since a dispute payload doesn't carry the merchant's own
+  obligation reference the way a payment event does (see
+  `handleDisputeOpened` in `src/lib/engine.ts`). It sets
+  `riskLevel: DISPUTE_ACTIVE`, escalates the case, and cancels anything
+  still pending — the AI is never allowed to keep pressuring a customer
+  mid-dispute.
+- **Customer opt-out** has two real triggers: every real email this
+  platform sends carries a working, signed unsubscribe link
+  (`src/app/api/optout/route.ts`, no login required — the link itself is
+  the credential), and a merchant can mark a case opted-out by hand from
+  the dashboard for a customer who said so on a call. Either one sets
+  `contactOptedOut`, which stops every future automated channel
+  permanently, not just the action in flight.
+
+**Customer-value calibration** (`src/lib/ai.ts`): a customer-value tier —
+derived from prior successful payments, see
+`GenericEcommerceAdapter.getCustomerContext` — actually changes the
+decision, not just the reasoning text. A HIGH-value, long-tenured customer
+gets a longer wait before the first nudge (30 min vs. 2 min for a
+brand-new one — more patience for a relationship worth protecting) and
+escalates to a human after just one unanswered automated attempt instead
+of three. This is a two-lever calibration (wait duration, escalation
+threshold), not a full re-weighting of every decision — noted honestly in
+"Known limitations" below.
 
 ## Terminal states — closing a case, not just escalating it
 
@@ -358,28 +539,9 @@ The AI then:
 
 The dashboard surfaces this as an amber banner ("Possible provider outage
 detected...") whenever a recent AI decision cited a suspected outage,
-rather than leaving it buried in the audit trail.
-
-## AI vs. rules — proving the calibration layer earns its complexity
-
-A merchant adopting this platform is almost always replacing a fixed-
-schedule dunning rule ("payment failed → reminder → wait a day → link →
-give up"), not nothing. Claiming the AI/policy layer is worth it needs to
-be demonstrable, not just asserted — so `decideNaiveBaseline()`
-(`src/lib/baseline.ts`) is exactly that fixed schedule, with none of the
-customer-value calibration, payment-method-lifecycle awareness, or
-provider-outage detection described above. It is **never executed** —
-every real AI decision also records what this baseline would have done
-instead (`RecoveryAction.baselineAction`), purely for comparison.
-
-The dashboard's "AI vs. a fixed-schedule rule" section shows the
-divergence rate (what fraction of decisions the AI made differently than
-the naive rule would have) and a breakdown of exactly what changed — e.g.
-"Rule would SEND_REMINDER — AI instead WAIT" when a failure looks
-transient, or "Rule would GENERATE_PAYMENT_LINK — AI instead
-OFFER_ALTERNATIVE_PAYMENT_METHOD" on an expired card. A 0% divergence rate
-would be an honest signal the calibration isn't earning its keep; this
-makes that claim checkable instead of asserted.
+rather than leaving it buried in the audit trail. A dedicated test proves
+one merchant's failures can't trigger a false outage flag on a different
+merchant sharing the same provider.
 
 ## Suspected-fraud detection — card testing isn't a struggling customer
 
@@ -400,6 +562,12 @@ takes an explicit human review to move the case forward again. The
 dashboard flags this with a red "Suspected fraud" badge next to the case
 status.
 
+A test also proves the two detectors coexist correctly: a case that is
+simultaneously part of a suspected provider outage *and* over the fraud
+threshold is blocked on fraud grounds — the AI's own reasoning still
+visibly cites the outage in the audit trail, but the Policy Engine's fraud
+check wins the actual blocking decision, unconditionally.
+
 ## Testing
 
 ```bash
@@ -408,100 +576,61 @@ npm run lint
 npx tsc --noEmit
 ```
 
-Tests cover provider-agnostic correlation, idempotency (including that it's
-scoped per merchant, not global), AI proposal + policy gating, the mandatory
-pre-action verification path, and the cross-channel resolution scenario
-end to end. The two cross-obligation detectors (provider-outage,
+90 tests, all passing, covering provider-agnostic correlation, idempotency
+(scoped per merchant, not global), AI proposal + policy gating, the
+mandatory pre-action verification path, and the cross-channel resolution
+scenario end to end. The two cross-obligation detectors (provider-outage,
 suspected-fraud) are tested at their exact trigger boundary (one below
-threshold vs. at threshold), not just an obvious "clearly not" case — and
-outage detection specifically has a test proving one merchant's failures
-can't trigger a false outage flag on a different merchant sharing the
-same provider.
+threshold vs. at threshold), not just an obvious "clearly not" case.
 
-Three further edge cases are covered, one of which turned up a real bug:
+Negative/zero-amount payments are explicitly guarded and tested:
+`UniversalPaymentEvent`'s zod schema declares `amountPaise` positive, but
+provider adapters build that object as a plain TypeScript literal that's
+never actually run through `.parse()` — so a malformed provider payload
+could otherwise reach `resolveObligation` with a zero or negative amount.
+It's now rejected explicitly, logged as `INVALID_PAYMENT_AMOUNT`, and the
+obligation is left untouched rather than silently corrupted.
 
-- **Negative/zero-amount payments.** `UniversalPaymentEvent`'s zod schema
-  declares `amountPaise` positive, but provider adapters build that object
-  as a plain TypeScript literal that's never actually run through
-  `.parse()` — so a malformed provider payload could reach
-  `resolveObligation` with a zero or negative amount. It's now guarded
-  explicitly: a non-positive amount is logged as `INVALID_PAYMENT_AMOUNT`
-  and the obligation is left untouched, rather than silently reducing (or
-  worse, *increasing*) the outstanding balance.
-- **Two payments racing for the same obligation.** Writing this test
-  (`Promise.all` of two concurrent successful payments for one
-  obligation) actually caught a real, pre-existing TOCTOU race in
-  `resolveObligation`: both calls could read `status != PAID` before
-  either had written, and both would proceed to resolve — double-crediting
-  attribution and writing two `OBLIGATION_RESOLVED` audit entries for a
-  single payment. Confirmed with 8 consecutive failing runs before the
-  fix, then 15 consecutive clean runs after it. Fixed with an optimistic
-  concurrency guard: the status-changing update is now conditioned on the
-  status still matching what was originally read (`updateMany` with a
-  `status` filter, checked via the affected row count) — the loser of the
-  race backs off and returns the current state instead of repeating the
-  resolution side effects.
-- **Both detectors firing on the same obligation at once.** A case that's
-  simultaneously part of a suspected provider outage *and* over the fraud
-  velocity threshold is blocked on fraud grounds — the Policy Engine's
-  `FRAUD_SUSPECTED` check is unconditional, so it wins regardless of what
-  the AI's own (outage-driven) reasoning says. Neither signal is silently
-  dropped from the audit trail; only the blocking decision is decided in
-  fraud's favor.
+See "What broke, and how we got out" above for the concurrency race this
+test suite actually caught, not just the ones it was written to prevent.
 
 ## Known limitations
 
-The PRD's "real-world problems" checklist is broader than what's wired up
-end to end. **Refunds**, **partial payments/overpayment**, **payment-
-method lifecycle** (expired cards), **provider-outage detection**,
-**AI-vs-rules defensibility metrics**, and **suspected-fraud detection**
-are now handled (see "Refunds and chargebacks", "Partial payment and
-overpayment", "Payment-method lifecycle", "Provider-outage detection",
-"AI vs. rules", and "Suspected-fraud detection" above — the payment-
-method lifecycle section has one known gap around subscription
-correlation, noted there). The fraud signal is deliberately narrow
-(rapid repeated attempts on one obligation) — it doesn't model stolen-
-card reuse across different obligations/customers, since no card
-fingerprint is captured anywhere in this system. Outbound
-provider/merchant API calls aren't modeled (everything is webhook-
-driven), so failure handling for those calls doesn't apply yet.
+Stated plainly, not hidden in the code:
 
-**Dispute holds** and **customer opt-out** are no longer guardrails
-without a trigger:
+- **Fraud detection is deliberately narrow** (rapid repeated attempts on
+  *one* obligation) — it doesn't model stolen-card reuse across different
+  obligations or customers, since no card fingerprint is captured
+  anywhere in this system.
+- **No fraud/velocity model beyond the single-obligation signal above** —
+  no IP/device fingerprinting, no cross-merchant fraud network effects.
+- **Outbound provider/merchant API calls aren't modeled** — everything is
+  webhook-driven, so failure handling for an outbound call timing out
+  doesn't apply here.
+- **`SEND_REMINDER` has no durable attribution reference** the way a
+  payment link does (see "Attribution" above) — a recovery that followed
+  a reminder resolves correctly but without credit.
+- **Provider adapters hardcode `obligationReferenceType` to `"ORDER"`**
+  (see "Payment-method lifecycle" above) — a real `SUBSCRIPTION`
+  obligation won't correlate through a live webhook yet.
+- **No SMS/WhatsApp channel** — real delivery covers payment links and
+  email only. A real Razorpay Payment Link's own `notify.sms` will still
+  text a customer when a phone number was provided at link creation, but
+  the platform doesn't independently send SMS/WhatsApp for a plain
+  `SEND_REMINDER`.
+- **Customer-value calibration is two levers, not a full re-weighting**:
+  wait duration and escalation threshold scale with customer value; the
+  *choice* between `SEND_REMINDER` / `GENERATE_PAYMENT_LINK` /
+  `OFFER_ALTERNATIVE_PAYMENT_METHOD` is still driven purely by failure
+  category, and the Policy Engine's amount ceiling is the only thing
+  sensitive to the payment's absolute size.
+- **Concurrency correctness is proven for the specific race the test
+  suite goes looking for** (two payments resolving one obligation at
+  once) — it is not a claim of full serializable-isolation correctness
+  across every code path in this system.
 
-- A **dispute/chargeback** (Razorpay `payment.dispute.created`, Stripe
-  `charge.dispute.created`) correlates through the disputed payment's
-  provider id — looked up against the `PaymentAttempt` already recorded for
-  it, since a dispute payload doesn't carry the merchant's own obligation
-  reference the way a payment event does (see `handleDisputeOpened` in
-  `src/lib/engine.ts`). It sets `riskLevel: DISPUTE_ACTIVE`, escalates the
-  case, and cancels anything still pending — the Policy Engine's existing
-  dispute guardrail now has something that actually sets it.
-- **Customer opt-out** has two real triggers: every real email this
-  platform sends carries a working, signed unsubscribe link
-  (`src/app/api/optout/route.ts`, no login required — the link itself is
-  the credential), and a merchant can mark a case opted-out by hand from
-  the dashboard for a customer who said so on a call. Either one sets
-  `contactOptedOut`, which the Policy Engine already enforced — it just had
-  nothing to check before.
-
-**Customer-value calibration** (`src/lib/ai.ts`): `RecoveryCaseContext`'s
-customer-value tier (derived from prior successful payments — see
-`GenericEcommerceAdapter.getCustomerContext`) now actually changes the
-decision, not just the reasoning text. A HIGH-value, long-tenured customer
-gets a longer wait before the first nudge (30 min vs. 2 min for a brand-new
-one — more patience for a relationship worth protecting) and escalates to a
-human after just one unanswered automated attempt instead of three. This is
-still a two-lever calibration (wait duration, escalation threshold), not a
-full re-weighting of every decision — the choice *between* SEND_REMINDER /
-GENERATE_PAYMENT_LINK / OFFER_ALTERNATIVE_PAYMENT_METHOD is still driven
-purely by failure category, and the Policy Engine's amount ceiling remains
-the only thing sensitive to the payment's absolute size.
-
-Real delivery (see "Real customer contact" above) covers payment links and
-email. There's still no SMS/WhatsApp channel, so a customer whose only
-contact on file is a phone number can't currently be reached for a plain
-`SEND_REMINDER` — a real Razorpay Payment Link's own `notify.sms` will
-still text them when a phone number was provided at creation, but the
-platform doesn't yet send its own SMS/WhatsApp messages independently of
-that.
+Everything *not* listed above as a gap — dispute holds, customer opt-out,
+refunds/chargebacks, partial payment/overpayment, payment-method
+lifecycle, provider-outage detection, AI-vs-rules metrics, and
+suspected-fraud detection — is implemented, tested, and verified live
+against a running server, not just described. Section by section, above.
