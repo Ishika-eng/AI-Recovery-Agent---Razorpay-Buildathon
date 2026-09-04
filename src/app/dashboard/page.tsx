@@ -6,8 +6,38 @@ import { ApprovalActions } from "@/components/ApprovalActions";
 import { CaseControls } from "@/components/CaseControls";
 import { LogoutButton } from "@/components/LogoutButton";
 import GhostFibers from "@/components/GhostFibers";
-import { DashboardTabs } from "@/components/DashboardTabs";
+import { DashboardSidebarNav } from "@/components/DashboardSidebarNav";
 import { FailureBreakdownChart, ObligationStatusChart, RecoveryBreakdownChart } from "@/components/DashboardCharts";
+
+const NAV_ICONS = {
+  overview: (
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2.5" y="2.5" width="6" height="6" rx="1" />
+      <rect x="11.5" y="2.5" width="6" height="6" rx="1" />
+      <rect x="2.5" y="11.5" width="6" height="6" rx="1" />
+      <rect x="11.5" y="11.5" width="6" height="6" rx="1" />
+    </svg>
+  ),
+  history: (
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M10 6v4l3 2" />
+    </svg>
+  ),
+  insights: (
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="10" width="3" height="7" rx="0.6" />
+      <rect x="8.5" y="5" width="3" height="12" rx="0.6" />
+      <rect x="14" y="8" width="3" height="9" rx="0.6" />
+    </svg>
+  ),
+  setup: (
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 2.5v3M13 2.5v3M4.5 7h11l-1 5.5a5 5 0 01-9 0z" />
+      <path d="M7 15.5v2M13 15.5v2" />
+    </svg>
+  ),
+};
 
 export const dynamic = "force-dynamic";
 
@@ -215,10 +245,10 @@ export default async function DashboardPage() {
       <div className="dashboard-atmosphere" aria-hidden="true">
         <GhostFibers lineColor="#241b61" glowColor="#4d42b7" speed={0.08} scale={2.6} layers={3} glowIntensity={0.38} brightness={0.7} blueBoost={1.1} vignette={1} grain={0.025} />
       </div>
-      <header className="border-b border-neutral-200 bg-white">
-        <div className="dashboard-header-inner mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+      <header className="dashboard-topbar border-b border-neutral-200 bg-white">
+        <div className="dashboard-header-inner flex items-center justify-between px-6 py-4">
           <div className="dashboard-brand">
-            <h1 className="text-lg font-semibold">Universal Payment Recovery & Reconciliation</h1>
+            <h1 className="text-base font-semibold">Universal Payment Recovery & Reconciliation</h1>
             <p className="text-sm text-neutral-500">{merchant.name} · {merchant.email} · test mode</p>
           </div>
           <div className="flex items-center gap-3">
@@ -228,58 +258,62 @@ export default async function DashboardPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-8 space-y-10">
-        {suspectedOutageAudit && (
-          <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            <span className="font-semibold">Possible provider outage detected.</span>{" "}
-            {suspectedOutageAudit.reasoning} Automated customer contact is paused for affected cases until this
-            clears.
-          </div>
-        )}
-        <section className="hero-stats grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <StatTile
-            size="lg"
-            label="₹ Recovered"
-            value={formatPaise(recoveredPaise)}
-            accent="text-emerald-600"
-            hint="Net of refunds — obligations currently PAID, minus any amount refunded back"
-          />
-          <StatTile size="lg" label="Recovery rate" value={`${recoveryRate.toFixed(1)}%`} hint="Share of all obligations that ended up PAID" />
-          <StatTile size="lg" label="₹ Still at risk" value={formatPaise(atRiskPaise)} hint="Total outstanding across every unpaid or partially-paid obligation" />
-        </section>
+      <main className="dashboard-main">
+        <DashboardSidebarNav
+          header={
+            <div className="dashboard-header-stack">
+              {suspectedOutageAudit && (
+                <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <span className="font-semibold">Possible provider outage detected.</span>{" "}
+                  {suspectedOutageAudit.reasoning} Automated customer contact is paused for affected cases until this
+                  clears.
+                </div>
+              )}
+              <section className="hero-stats grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <StatTile
+                  size="lg"
+                  label="₹ Recovered"
+                  value={formatPaise(recoveredPaise)}
+                  accent="text-emerald-600"
+                  hint="Net of refunds — obligations currently PAID, minus any amount refunded back"
+                />
+                <StatTile size="lg" label="Recovery rate" value={`${recoveryRate.toFixed(1)}%`} hint="Share of all obligations that ended up PAID" />
+                <StatTile size="lg" label="₹ Still at risk" value={formatPaise(atRiskPaise)} hint="Total outstanding across every unpaid or partially-paid obligation" />
+              </section>
 
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatTile
-            size="sm"
-            label="Attributed to AI"
-            value={formatPaise(attributedPaise)}
-            hint="Only counted when traced to a specific action this platform took (a matched payment link) — not inferred from a case merely existing at the time"
-          />
-          <StatTile
-            size="sm"
-            label="Cross-channel resolutions"
-            value={String(crossChannelResolutions.length)}
-            hint="Paid through a different channel than the one that failed"
-          />
-          <StatTile
-            size="sm"
-            label="Actions prevented"
-            value={String(recoveryActionsPrevented)}
-            hint="Reminders/links cancelled because the customer already paid"
-          />
-          <StatTile
-            size="sm"
-            label="AI vs. fixed rules"
-            value={aiVsBaselineTotal > 0 ? `${divergenceRate.toFixed(0)}% diverged` : "No data yet"}
-            hint={`${divergentActions.length} of ${aiVsBaselineTotal} AI decisions chose differently than a naive fixed-schedule rule would have — never executed, recorded only for comparison`}
-          />
-        </section>
-
-        <DashboardTabs
-          tabs={[
+              <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <StatTile
+                  size="sm"
+                  label="Attributed to AI"
+                  value={formatPaise(attributedPaise)}
+                  hint="Only counted when traced to a specific action this platform took (a matched payment link) — not inferred from a case merely existing at the time"
+                />
+                <StatTile
+                  size="sm"
+                  label="Cross-channel resolutions"
+                  value={String(crossChannelResolutions.length)}
+                  hint="Paid through a different channel than the one that failed"
+                />
+                <StatTile
+                  size="sm"
+                  label="Actions prevented"
+                  value={String(recoveryActionsPrevented)}
+                  hint="Reminders/links cancelled because the customer already paid"
+                />
+                <StatTile
+                  size="sm"
+                  label="AI vs. fixed rules"
+                  value={aiVsBaselineTotal > 0 ? `${divergenceRate.toFixed(0)}% diverged` : "No data yet"}
+                  hint={`${divergentActions.length} of ${aiVsBaselineTotal} AI decisions chose differently than a naive fixed-schedule rule would have — never executed, recorded only for comparison`}
+                />
+              </section>
+            </div>
+          }
+          items={[
             {
               id: "overview",
               label: "Overview",
+              icon: NAV_ICONS.overview,
               badge: pendingActions.length,
               content: (
                 <div className="space-y-10">
@@ -407,6 +441,7 @@ export default async function DashboardPage() {
             {
               id: "history",
               label: "History",
+              icon: NAV_ICONS.history,
               content: (
                 <div className="space-y-10">
                   <section>
@@ -499,6 +534,7 @@ export default async function DashboardPage() {
             {
               id: "insights",
               label: "Insights",
+              icon: NAV_ICONS.insights,
               content: (
                 <div className="space-y-10">
                   <section className="grid gap-6 sm:grid-cols-2">
@@ -557,6 +593,7 @@ export default async function DashboardPage() {
             {
               id: "setup",
               label: "Setup",
+              icon: NAV_ICONS.setup,
               content: (
                 <section>
                   <h2 className="mb-3 text-base font-semibold">Webhook integration</h2>

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { SpecularLinkButton } from "@/components/SpecularLinkButton";
 
 export function LandingNav() {
   const [open, setOpen] = useState(false);
@@ -12,7 +13,19 @@ export function LandingNav() {
       </button>
       <nav className={`landing-nav ${open ? "is-open" : ""}`}>
         <Link href="/login" onClick={() => setOpen(false)}>Sign in</Link>
-        <Link href="/signup" className="nav-cta" onClick={() => setOpen(false)}>Get started</Link>
+        <SpecularLinkButton
+          href="/signup"
+          size="sm"
+          radius={8}
+          tint="#ffffff"
+          tintOpacity={1}
+          textColor="#171717"
+          lineColor="#ffffff"
+          baseColor="#d4d4d4"
+          proximity={200}
+        >
+          Get started
+        </SpecularLinkButton>
       </nav>
     </>
   );

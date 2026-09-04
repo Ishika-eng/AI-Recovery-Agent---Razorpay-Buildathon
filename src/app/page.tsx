@@ -3,6 +3,8 @@ import GhostFibers from "@/components/GhostFibers";
 import { DarkBodyBackground } from "@/components/DarkBodyBackground";
 import { LandingNav } from "@/components/LandingNav";
 import { ScrollReveal } from "@/components/ScrollReveal";
+import BlurText from "@/components/BlurText";
+import { SpecularLinkButton } from "@/components/SpecularLinkButton";
 
 const PRINCIPLES = [
   {
@@ -70,20 +72,33 @@ export default function LandingPage() {
       <main className="relative z-10">
         <section className="px-6 py-24 text-center sm:py-28">
           <div className="mx-auto max-w-4xl">
-            <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-              Universal payment recovery.
-              <br />
-              Every provider. Every platform. One engine.
-            </h1>
+            <h1 className="sr-only">Universal payment recovery. Every provider. Every platform. One engine.</h1>
+            <BlurText
+              text="Universal payment recovery. Every provider. Every platform. One engine."
+              delay={90}
+              animateBy="words"
+              direction="top"
+              className="justify-center text-center text-4xl font-semibold tracking-tight text-white sm:text-5xl"
+            />
             <p className="mx-auto mt-6 max-w-2xl text-lg text-neutral-300">
               A provider-agnostic, AI-powered recovery and reconciliation layer that sits above however your business
               takes payments. It tracks what a customer actually owes — not any single provider&apos;s transaction — and
               recovers it safely, wherever they end up paying.
             </p>
             <div className="mt-8 flex items-center justify-center gap-3">
-              <Link href="/signup" className="rounded bg-white px-6 py-3 text-sm font-medium text-neutral-900 hover:bg-neutral-200">
+              <SpecularLinkButton
+                href="/signup"
+                size="md"
+                radius={10}
+                tint="#ffffff"
+                tintOpacity={1}
+                textColor="#171717"
+                lineColor="#ffffff"
+                baseColor="#d4d4d4"
+                proximity={280}
+              >
                 Get started free
-              </Link>
+              </SpecularLinkButton>
               <Link href="/login" className="rounded border border-white/30 px-6 py-3 text-sm font-medium text-white hover:bg-white/10">
                 Sign in
               </Link>
@@ -93,10 +108,10 @@ export default function LandingPage() {
 
         <ScrollReveal><section className="border-t border-white/10 py-16">
           <div className="mx-auto max-w-4xl px-6">
-            <p className="text-center text-sm uppercase tracking-wide text-neutral-400">Works across</p>
+            <p className="text-center text-sm uppercase tracking-wide text-neutral-200 [text-shadow:0_1px_8px_rgba(0,0,0,.6)]">Works across</p>
             <div className="mt-6 grid gap-8 sm:grid-cols-2">
               <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">Payment providers</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-neutral-200 [text-shadow:0_1px_8px_rgba(0,0,0,.6)]">Payment providers</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {PROVIDERS.map((p) => (
                     <span
@@ -109,7 +124,7 @@ export default function LandingPage() {
                 </div>
               </div>
               <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">Business platforms</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-neutral-200 [text-shadow:0_1px_8px_rgba(0,0,0,.6)]">Business platforms</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {PLATFORMS.map((p) => (
                     <span
@@ -145,9 +160,21 @@ export default function LandingPage() {
             Create an account, accept what the agent is authorized to do, and point your provider webhooks at your
             dashboard.
           </p>
-          <Link href="/signup" className="mt-6 inline-block rounded bg-white px-6 py-3 text-sm font-medium text-neutral-900 hover:bg-neutral-100">
-            Get started free
-          </Link>
+          <div className="mt-6">
+            <SpecularLinkButton
+              href="/signup"
+              size="md"
+              radius={10}
+              tint="#ffffff"
+              tintOpacity={1}
+              textColor="#171717"
+              lineColor="#ffffff"
+              baseColor="#d4d4d4"
+              proximity={280}
+            >
+              Get started free
+            </SpecularLinkButton>
+          </div>
         </section></ScrollReveal>
       </main>
 
