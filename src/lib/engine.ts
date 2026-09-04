@@ -589,6 +589,7 @@ export async function runRecoveryCycle(obligationId: string) {
   const context: RecoveryCaseContext = {
     obligation: {
       id: obligation.id,
+      referenceType: obligation.referenceType,
       amountPaise: obligation.originalAmountPaise,
       outstandingAmountPaise: obligation.outstandingAmountPaise,
       status: obligation.status as RecoveryCaseContext["obligation"]["status"],
