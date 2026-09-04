@@ -30,14 +30,17 @@ export default async function OnboardingPage() {
   if (merchant.termsAcceptedAt) redirect("/dashboard");
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center px-6 py-16">
-      <h1 className="text-2xl font-semibold text-neutral-900">Before {merchant.name} goes live</h1>
+    <div className="onboarding-page">
+      <div className="onboarding-card">
+      <div className="onboarding-top"><span className="brand-mark">↗</span> Universal Recovery</div>
+      <div className="onboarding-intro">
+      <h1>Before {merchant.name} goes live</h1>
       <p className="mt-2 text-neutral-600">
         Here&apos;s what the recovery agent is authorized to do on your behalf. You can review and adjust the limits
         any time after setup.
       </p>
 
-      <div className="mt-8 space-y-5">
+      <div className="onboarding-terms">
         {TERMS.map((term) => (
           <div key={term.title} className="rounded border border-neutral-200 bg-white p-4">
             <h2 className="text-sm font-semibold text-neutral-900">{term.title}</h2>
@@ -54,6 +57,8 @@ export default async function OnboardingPage() {
           Accept and go to dashboard
         </button>
       </form>
+      </div>
+      </div>
     </div>
   );
 }

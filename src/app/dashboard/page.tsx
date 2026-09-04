@@ -180,10 +180,10 @@ export default async function DashboardPage() {
   ).sort((a, b) => b[1] - a[1]);
 
   return (
-    <div className="min-h-screen bg-neutral-50 pb-24 text-neutral-900">
+    <div className="dashboard-shell min-h-screen bg-neutral-50 pb-24 text-neutral-900">
       <header className="border-b border-neutral-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-          <div>
+        <div className="dashboard-header-inner mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+          <div className="dashboard-brand">
             <h1 className="text-lg font-semibold">Universal Payment Recovery & Reconciliation</h1>
             <p className="text-sm text-neutral-500">{merchant.name} · {merchant.email} · test mode</p>
           </div>

@@ -42,15 +42,15 @@ export default function LandingPage() {
           this root div already carries, and that same flat dark colour
           — not an animated one — continues, genuinely unbroken, for
           however far the page scrolls. */}
-      <div className="absolute inset-x-0 top-0 h-screen min-h-[640px] -z-10">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-0 h-screen min-h-[640px]">
         <GhostFibers
-          lineColor="#1b1650"
-          glowColor="#4f46e5"
+          lineColor="#4036a8"
+          glowColor="#6b66ff"
           speed={0.18}
-          scale={2.2}
-          layers={4}
-          glowIntensity={0.85}
-          brightness={1.4}
+          scale={1.7}
+          layers={5}
+          glowIntensity={1.35}
+          brightness={2.2}
           blueBoost={1}
           vignette={0.9}
           grain={0.04}

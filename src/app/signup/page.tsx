@@ -8,70 +8,33 @@ export default function SignupPage() {
   const [state, action, pending] = useActionState(signupAction, undefined);
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-6">
-      <h1 className="text-xl font-semibold text-neutral-900">Create your account</h1>
-      <p className="mt-1 text-sm text-neutral-500">Set up recovery for your business in a couple of minutes.</p>
-
-      <form action={action} className="mt-6 space-y-4">
-        <div>
-          <label htmlFor="name" className="block text-sm font-medium text-neutral-700">
-            Business name
-          </label>
-          <input
-            id="name"
-            name="name"
-            type="text"
-            required
-            autoComplete="organization"
-            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
-          />
+    <div className="auth-page">
+      <aside className="auth-visual">
+        <div className="auth-brand"><span className="brand-mark">↗</span> Universal Recovery</div>
+        <div className="auth-visual-copy">
+          <h2>Make every payment attempt count.</h2>
+          <p>See the full obligation, not just the failed transaction. Recover intelligently across Razorpay, Stripe, and every channel after them.</p>
+          <div className="auth-proof"><div><strong>1 view</strong>Across providers</div><div><strong>0 guesswork</strong>Auditable decisions</div></div>
         </div>
-        <div>
-          <label htmlFor="email" className="block text-sm font-medium text-neutral-700">
-            Email
-          </label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            required
-            autoComplete="email"
-            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
-          />
+      </aside>
+      <main className="auth-form-panel">
+        <div className="auth-card">
+          <h1>Set up your workspace</h1>
+          <p>Start recovering revenue for your business in a couple of minutes.</p>
+          <form action={action} className="auth-form">
+            <label htmlFor="name">Business name</label>
+            <input id="name" name="name" type="text" required autoComplete="organization" placeholder="Acme Commerce" />
+            <label htmlFor="email">Work email</label>
+            <input id="email" name="email" type="email" required autoComplete="email" placeholder="you@company.com" />
+            <label htmlFor="password">Password</label>
+            <input id="password" name="password" type="password" required minLength={8} autoComplete="new-password" placeholder="At least 8 characters" />
+            {state?.error && <p className="auth-error">{state.error}</p>}
+            <button type="submit" disabled={pending}>{pending ? "Creating workspace…" : "Create workspace"}</button>
+          </form>
+          <p className="auth-switch">Already have an account? <Link href="/login">Sign in</Link></p>
+          <Link href="/" className="auth-back">← Back to home</Link>
         </div>
-        <div>
-          <label htmlFor="password" className="block text-sm font-medium text-neutral-700">
-            Password
-          </label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            required
-            minLength={8}
-            autoComplete="new-password"
-            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
-          />
-          <p className="mt-1 text-xs text-neutral-400">At least 8 characters.</p>
-        </div>
-
-        {state?.error && <p className="text-sm text-red-600">{state.error}</p>}
-
-        <button
-          type="submit"
-          disabled={pending}
-          className="w-full rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-        >
-          {pending ? "Creating account…" : "Create account"}
-        </button>
-      </form>
-
-      <p className="mt-4 text-center text-sm text-neutral-500">
-        Already have an account?{" "}
-        <Link href="/login" className="font-medium text-neutral-900 underline">
-          Sign in
-        </Link>
-      </p>
+      </main>
     </div>
   );
 }
