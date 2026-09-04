@@ -349,6 +349,50 @@ export async function optOutCustomer(obligationId: string, reason: string) {
   return db.recoveryCase.findUniqueOrThrow({ where: { id: recoveryCase.id } });
 }
 
+// The missing terminal state: a case can escalate to a merchant, the
+// merchant can reject one proposed action, and reject a dozen more after
+// it — but until now nothing actually *closed* the case. "Runs out of
+// runway and needs a human decision on whether to keep trying or write it
+// off" only half-existed: the human decision point (the approval queue)
+// worked, but "write it off" had nowhere to go. This is that path —
+// a deliberate, terminal, merchant-made decision, distinct from
+// resolveObligation() (money arrived) and STOP_RECOVERY (the AI proposed
+// pausing, which is not the same as a human giving up on it).
+export async function writeOffObligation(obligationId: string, reason: string) {
+  const obligation = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
+
+  if (obligation.status === "PAID" || obligation.status === "CANCELLED") {
+    return obligation; // already resolved, or already written off — idempotent no-op
+  }
+
+  const updated = await db.paymentObligation.update({
+    where: { id: obligationId },
+    data: { status: "CANCELLED", resolvedAt: new Date(), resolutionSource: "write_off" },
+  });
+
+  const recoveryCase = await db.recoveryCase.findUnique({ where: { obligationId } });
+  if (recoveryCase && recoveryCase.status !== "RESOLVED" && recoveryCase.status !== "CANCELLED") {
+    await db.recoveryCase.update({
+      where: { id: recoveryCase.id },
+      data: { status: "CANCELLED", nextAction: null, nextActionAt: null, resolvedAt: new Date() },
+    });
+    await db.recoveryAction.updateMany({
+      where: { caseId: recoveryCase.id, executionStatus: { in: ["PROPOSED", "PENDING_APPROVAL", "APPROVED"] } },
+      data: { executionStatus: "POLICY_BLOCKED" },
+    });
+  }
+
+  await audit(
+    obligation.merchantId,
+    "MERCHANT",
+    "WRITE_OFF",
+    `Merchant wrote off this obligation (${reason}) — recovery stops permanently; this is a business decision, not a resolution.`,
+    { obligationId, caseId: recoveryCase?.id }
+  );
+
+  return updated;
+}
+
 // ---------------------------------------------------------------------------
 // Recovery cycle — one pass of: verify → gather context → AI proposes →
 // Policy gates → execute (or park for approval). This is what runs after
