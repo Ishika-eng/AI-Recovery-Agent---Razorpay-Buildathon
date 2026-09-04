@@ -84,7 +84,7 @@ export type Provider = z.infer<typeof Provider>;
 // ---------------------------------------------------------------------------
 
 export const UniversalPaymentEvent = z.object({
-  eventType: z.enum(["PAYMENT_FAILED", "PAYMENT_SUCCEEDED", "PAYMENT_PENDING", "DISPUTE_OPENED"]),
+  eventType: z.enum(["PAYMENT_FAILED", "PAYMENT_SUCCEEDED", "PAYMENT_PENDING", "DISPUTE_OPENED", "REFUND_ISSUED"]),
   provider: Provider,
   providerEventId: z.string(),
   merchantId: z.string(),
@@ -113,6 +113,20 @@ export const UniversalPaymentEvent = z.object({
 
   // DISPUTE_OPENED only.
   disputedPaymentId: z.string().optional(),
+
+  // REFUND_ISSUED only. amountPaise, when present, is the *cumulative*
+  // refunded total the provider reports on that payment (Razorpay's
+  // amount_refunded), not a delta — engine.ts treats it as a set, not an
+  // increment, to stay correct if a refund webhook is ever redelivered.
+  refundedPaymentId: z.string().optional(),
+  refundAmountPaise: z.number().int().nonnegative().optional(),
+
+  // PAYMENT_SUCCEEDED only, and only when the success came through a
+  // payment link this platform generated (src/lib/actions/paymentLink.ts).
+  // This is what makes attribution possible — see resolveObligation in
+  // engine.ts — instead of every resolution being credited to "something,
+  // somehow."
+  paymentLinkId: z.string().optional(),
 
   customerId: z.string().optional(),
   customerContact: z.string().optional(),
