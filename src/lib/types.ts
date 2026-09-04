@@ -176,6 +176,10 @@ export const RecoveryCaseContext = z.object({
       provider: Provider,
       status: AttemptStatus,
       failureCategory: FailureCategory.optional(),
+      // Needed for mandate-retry sequencing: a failed UPI Autopay/e-mandate
+      // debit follows NPCI's own retry limits, not the generic
+      // instrument-retry logic every other payment method gets.
+      paymentMethod: z.string().optional(),
     })
   ),
   recoveryHistory: z.object({
