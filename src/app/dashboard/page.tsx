@@ -36,6 +36,7 @@ const ACTION_LABELS: Record<string, string> = {
   OFFER_ALTERNATIVE_PAYMENT_METHOD: "Offer alternative method",
   SCHEDULE_FOLLOW_UP: "Schedule follow-up",
   RECORD_PROMISE_TO_PAY: "Record promise-to-pay",
+  RECOMMEND_VOICE_OUTREACH: "Recommend voice outreach",
   ESCALATE_TO_HUMAN: "Escalate to human",
   STOP_RECOVERY: "Stop recovery",
 };
@@ -258,7 +259,12 @@ export default async function DashboardPage() {
                       <td className="px-4 py-3 font-medium">{a.case.obligation.referenceId}</td>
                       <td className="px-4 py-3">{formatPaise(a.case.obligation.outstandingAmountPaise)}</td>
                       <td className="px-4 py-3">{ACTION_LABELS[a.actionType] ?? a.actionType}</td>
-                      <td className="max-w-xs px-4 py-3 text-neutral-600">{a.policyReasoning ?? a.reason}</td>
+                      <td className="max-w-xs px-4 py-3 text-neutral-600">
+                        <p>{a.reason}</p>
+                        {a.policyReasoning && a.policyReasoning !== a.reason && (
+                          <p className="mt-1 text-xs italic text-neutral-400">{a.policyReasoning}</p>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <ApprovalActions actionId={a.id} />
                       </td>
