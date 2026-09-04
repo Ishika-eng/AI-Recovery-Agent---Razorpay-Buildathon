@@ -10,6 +10,7 @@ const ALL_ACTIONS: RecoveryCaseContext["allowedActions"] = [
   "OFFER_ALTERNATIVE_PAYMENT_METHOD",
   "SCHEDULE_FOLLOW_UP",
   "RECORD_PROMISE_TO_PAY",
+  "RECOMMEND_VOICE_OUTREACH",
   "ESCALATE_TO_HUMAN",
   "STOP_RECOVERY",
 ];
@@ -78,7 +79,10 @@ describe("decideRecoveryAction — calibrated to customer value", () => {
     const standard = decideRecoveryAction(context({ customerValue: "STANDARD", messagesSent: 1 }));
     const lowValue = decideRecoveryAction(context({ customerValue: "LOW", messagesSent: 1 }));
 
-    expect(highValue.action).toBe("ESCALATE_TO_HUMAN"); // this tier's limit is 1 automated attempt
+    // This tier's limit is 1 automated attempt — HIGH value additionally
+    // gets a recommended personal call with a ready script, not just a
+    // bare hand-off (see the dedicated Hinglish voice recovery tests).
+    expect(highValue.action).toBe("RECOMMEND_VOICE_OUTREACH");
     expect(standard.action).toBe("SCHEDULE_FOLLOW_UP"); // standard tolerates a second attempt first
     expect(lowValue.action).toBe("SCHEDULE_FOLLOW_UP"); // low tolerates a third attempt first
 
@@ -265,5 +269,30 @@ describe("decideRecoveryAction — mandate retry sequencer (UPI Autopay / e-mand
       })
     );
     expect(decision.action).not.toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
+  });
+});
+
+describe("decideRecoveryAction — Hinglish voice recovery for high-value relationships", () => {
+  it("recommends voice outreach with a ready script instead of a bare escalation for a HIGH-value customer", () => {
+    const decision = decideRecoveryAction(context({ customerValue: "HIGH", messagesSent: 1 }));
+    expect(decision.action).toBe("RECOMMEND_VOICE_OUTREACH");
+    expect(decision.reason).toMatch(/script/i);
+    expect(decision.reason).toMatch(/Namaste/);
+  });
+
+  it("still escalates plainly for STANDARD/LOW tiers instead of recommending voice outreach", () => {
+    const standard = decideRecoveryAction(context({ customerValue: "STANDARD", messagesSent: 2 }));
+    const low = decideRecoveryAction(context({ customerValue: "LOW", messagesSent: 3 }));
+    expect(standard.action).toBe("ESCALATE_TO_HUMAN");
+    expect(low.action).toBe("ESCALATE_TO_HUMAN");
+  });
+
+  it("falls back to a plain escalation if voice outreach isn't in this case's allowed action set", () => {
+    const restricted = context({ customerValue: "HIGH", messagesSent: 1 });
+    const decision = decideRecoveryAction({
+      ...restricted,
+      allowedActions: restricted.allowedActions.filter((a) => a !== "RECOMMEND_VOICE_OUTREACH"),
+    });
+    expect(decision.action).toBe("ESCALATE_TO_HUMAN");
   });
 });
