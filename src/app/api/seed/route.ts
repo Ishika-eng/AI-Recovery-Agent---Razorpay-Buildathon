@@ -2,7 +2,8 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getCurrentMerchant } from "@/lib/dal";
-import { createObligation, ingestProviderEvent } from "@/lib/engine";
+import { createObligation, ingestProviderEvent, recordPromiseToPay } from "@/lib/engine";
+import { detectSilentObligations } from "@/lib/silentObligations";
 
 // Dev-only: builds a demo merchant and a batch of obligations that exercise
 // every part of the pipeline described in the PRD — two different provider
@@ -89,12 +90,13 @@ export async function POST() {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
 
-  // Wide contact window so the demo isn't at the mercy of real wall-clock
-  // time; the guardrail logic itself is still enforced and covered by unit
-  // tests with a mocked clock.
+  // Wide contact window and no minimum message gap so the demo isn't at
+  // the mercy of real wall-clock time between seeded touches; the
+  // guardrail logic itself is still enforced and covered by unit tests
+  // with a mocked clock.
   const merchant = await db.merchant.update({
     where: { id: sessionMerchant.id },
-    data: { contactWindowStartHour: 0, contactWindowEndHour: 24 },
+    data: { contactWindowStartHour: 0, contactWindowEndHour: 24, minMessageGapHours: 0 },
   });
 
   const created: string[] = [];
@@ -241,6 +243,158 @@ export async function POST() {
       );
     }
     created.push(obligation.id);
+  }
+
+  // --- Checkout drop-off + overdue B2B receivable: both never produce a
+  // provider event at all (zero payment attempts), so detectSilentObligations()
+  // is invoked directly here instead of waiting for the next cron tick,
+  // purely so the demo shows the result immediately rather than up to 5
+  // minutes later.
+  const droppedCheckout = await createObligation({
+    merchantId: merchant.id,
+    referenceType: "ORDER",
+    referenceId: `ORDER_DROPOFF_${runId}`,
+    customerId: "cust_dropoff",
+    customerContact: "+919800000004",
+    amountPaise: 250000,
+  });
+  await db.paymentObligation.update({
+    where: { id: droppedCheckout.id },
+    data: { createdAt: new Date(Date.now() - 45 * 60 * 1000) }, // 45 minutes ago — past the 30-minute abandonment threshold
+  });
+  created.push(droppedCheckout.id);
+
+  const overdueInvoice = await createObligation({
+    merchantId: merchant.id,
+    referenceType: "INVOICE",
+    referenceId: `INVOICE_OVERDUE_${runId}`,
+    customerId: "cust_receivable",
+    customerContact: "+919800000005",
+    amountPaise: 4_200_000,
+    dueDate: new Date(Date.now() - 3 * 24 * 3_600_000), // 3 days overdue
+  });
+  created.push(overdueInvoice.id);
+
+  await detectSilentObligations(merchant.id);
+
+  // --- Mandate retry sequencer: two failed UPI Autopay/e-mandate debits,
+  // enough to exhaust the 1-retry NPCI-style cap and get
+  // OFFER_ALTERNATIVE_PAYMENT_METHOD proposed instead of another retry.
+  const mandate = await createObligation({
+    merchantId: merchant.id,
+    referenceType: "ORDER",
+    referenceId: `ORDER_MANDATE_${runId}`,
+    customerId: "cust_mandate",
+    customerContact: "+919800000006",
+    amountPaise: 99900,
+  });
+  await pushRazorpay(
+    merchant.id,
+    razorpayFailedPayload({
+      paymentId: `pay_mandate_1_${runId}`,
+      obligationId: mandate.referenceId,
+      amountPaise: mandate.originalAmountPaise,
+      errorCode: "GATEWAY_TIMEOUT",
+      errorDescription: "Mandate execution failed",
+      method: "emandate",
+      contact: mandate.customerContact ?? undefined,
+    })
+  );
+  await pushRazorpay(
+    merchant.id,
+    razorpayFailedPayload({
+      paymentId: `pay_mandate_2_${runId}`,
+      obligationId: mandate.referenceId,
+      amountPaise: mandate.originalAmountPaise,
+      errorCode: "GATEWAY_TIMEOUT",
+      errorDescription: "Mandate execution failed",
+      method: "emandate",
+      contact: mandate.customerContact ?? undefined,
+    })
+  );
+  created.push(mandate.id);
+
+  // --- Hinglish voice recovery: a HIGH-value customer (10+ prior PAID
+  // obligations, what GenericEcommerceAdapter.getCustomerContext treats as
+  // HIGH) whose one automated attempt already went unanswered — the AI
+  // should recommend a voice call with a ready script instead of a bare
+  // escalation.
+  const voiceCustomerId = `cust_voice_${runId}`;
+  await Promise.all(
+    Array.from({ length: 10 }, (_, i) =>
+      db.paymentObligation.create({
+        data: {
+          merchantId: merchant.id,
+          referenceType: "ORDER",
+          referenceId: `ORDER_VOICE_HISTORY_${runId}_${i}`,
+          customerId: voiceCustomerId,
+          originalAmountPaise: 100000,
+          outstandingAmountPaise: 0,
+          status: "PAID",
+        },
+      })
+    )
+  );
+  const voiceTarget = await createObligation({
+    merchantId: merchant.id,
+    referenceType: "ORDER",
+    referenceId: `ORDER_VOICE_${runId}`,
+    customerId: voiceCustomerId,
+    customerContact: "+919800000007",
+    amountPaise: 850000,
+  });
+  // Seed "one automated attempt already went out and got no response"
+  // directly, rather than relying on a real GENERATE_PAYMENT_LINK to
+  // actually auto-execute first — at this amount it requires merchant
+  // approval (over the auto-approve ceiling), so a real first touch would
+  // never reach messagesSent=1 on its own for this demo. The *second*
+  // touch below is still pushed as a real webhook through the real
+  // pipeline — that's the live decision this scenario exists to show.
+  const voiceCase = await db.recoveryCase.create({
+    data: { obligationId: voiceTarget.id, status: "WAITING", messagesSent: 1 },
+  });
+  await db.paymentAttempt.create({
+    data: {
+      obligationId: voiceTarget.id,
+      provider: "razorpay",
+      providerPaymentId: `pay_voice_seed_${runId}`,
+      amountPaise: voiceTarget.originalAmountPaise,
+      status: "FAILED",
+      failureCategory: "ISSUER_DECLINE",
+      failureReason: "Card was declined by the issuing bank",
+    },
+  });
+  await db.recoveryAction.create({
+    data: {
+      caseId: voiceCase.id,
+      actionType: "GENERATE_PAYMENT_LINK",
+      proposedBy: "AI",
+      reason: "Failure indicates the instrument itself won't clear on retry — offering a fresh payment link (demo seed).",
+      policyResult: "REQUIRES_APPROVAL",
+      policyReasoning: "Outstanding amount exceeds the auto-approve ceiling — requires merchant sign-off before executing.",
+      executionStatus: "EXECUTED",
+      executedAt: new Date(),
+    },
+  });
+  await pushRazorpay(
+    merchant.id,
+    razorpayFailedPayload({
+      paymentId: `pay_voice_2_${runId}`,
+      obligationId: voiceTarget.referenceId,
+      amountPaise: voiceTarget.originalAmountPaise,
+      errorCode: "CARD_DECLINED",
+      errorDescription: "Card was declined by the issuing bank",
+      contact: voiceTarget.customerContact ?? undefined,
+    })
+  );
+  created.push(voiceTarget.id);
+
+  // --- Promise-to-pay tracker: pre-seed one kept and one still-pending
+  // promise so the tracker shows real, non-zero numbers immediately
+  // rather than needing a manual click first.
+  const promiseCase = await db.recoveryCase.findUnique({ where: { obligationId: liveDemo.id } });
+  if (promiseCase) {
+    await recordPromiseToPay(liveDemo.id, "Customer said they'd pay by end of week (demo seed)");
   }
 
   return NextResponse.json({ merchantId: merchant.id, created: created.length, flagshipObligationId: flagship.id, liveDemoObligationId: liveDemo.id });
