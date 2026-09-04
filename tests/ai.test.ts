@@ -1,0 +1,93 @@
+import { describe, expect, it } from "vitest";
+import { decideRecoveryAction } from "@/lib/ai";
+import type { RecoveryCaseContext } from "@/lib/types";
+
+const ALL_ACTIONS: RecoveryCaseContext["allowedActions"] = [
+  "WAIT",
+  "VERIFY_PAYMENT",
+  "SEND_REMINDER",
+  "GENERATE_PAYMENT_LINK",
+  "OFFER_ALTERNATIVE_PAYMENT_METHOD",
+  "SCHEDULE_FOLLOW_UP",
+  "RECORD_PROMISE_TO_PAY",
+  "ESCALATE_TO_HUMAN",
+  "STOP_RECOVERY",
+];
+
+function context(overrides: {
+  customerValue: "LOW" | "STANDARD" | "HIGH";
+  relationshipAgeDays?: number;
+  successfulPayments?: number;
+  messagesSent?: number;
+  waitedAlready?: boolean;
+  failureCategory?: RecoveryCaseContext["paymentHistory"][number]["failureCategory"];
+}): RecoveryCaseContext {
+  return {
+    obligation: { id: "obl_1", amountPaise: 500000, outstandingAmountPaise: 500000, status: "UNPAID" },
+    customer: {
+      relationshipAgeDays: overrides.relationshipAgeDays ?? 0,
+      successfulPayments: overrides.successfulPayments ?? 0,
+      customerValue: overrides.customerValue,
+    },
+    paymentHistory: [{ provider: "razorpay", status: "FAILED", failureCategory: overrides.failureCategory ?? "TIMEOUT" }],
+    recoveryHistory: {
+      messagesSent: overrides.messagesSent ?? 0,
+      retryCount: 1,
+      waitedAlready: overrides.waitedAlready ?? false,
+      lastActionAt: null,
+    },
+    allowedActions: ALL_ACTIONS,
+  };
+}
+
+// This is the ₹50,000-loyal-customer vs ₹500-new-customer example from the
+// problem statement, made concrete: two cases identical in every way except
+// who the customer is must produce different decisions, not just different
+// reasoning text describing the same decision.
+describe("decideRecoveryAction — calibrated to customer value", () => {
+  it("waits longer before nudging a high-value, long-tenured customer than a new one", () => {
+    const highValue = decideRecoveryAction(
+      context({ customerValue: "HIGH", relationshipAgeDays: 500, successfulPayments: 20 })
+    );
+    const lowValue = decideRecoveryAction(
+      context({ customerValue: "LOW", relationshipAgeDays: 0, successfulPayments: 0 })
+    );
+
+    expect(highValue.action).toBe("WAIT");
+    expect(lowValue.action).toBe("WAIT");
+    expect(highValue.waitMinutes).toBeGreaterThan(lowValue.waitMinutes!);
+  });
+
+  it("escalates a high-value customer to a human sooner than a low-value one", () => {
+    // One automated message already sent, still unpaid, next decision:
+    const highValue = decideRecoveryAction(context({ customerValue: "HIGH", messagesSent: 1 }));
+    const standard = decideRecoveryAction(context({ customerValue: "STANDARD", messagesSent: 1 }));
+    const lowValue = decideRecoveryAction(context({ customerValue: "LOW", messagesSent: 1 }));
+
+    expect(highValue.action).toBe("ESCALATE_TO_HUMAN"); // this tier's limit is 1 automated attempt
+    expect(standard.action).toBe("SCHEDULE_FOLLOW_UP"); // standard tolerates a second attempt first
+    expect(lowValue.action).toBe("SCHEDULE_FOLLOW_UP"); // low tolerates a third attempt first
+
+    // And at messagesSent = 2, standard has now hit its limit but low hasn't yet.
+    const standardAtTwo = decideRecoveryAction(context({ customerValue: "STANDARD", messagesSent: 2 }));
+    const lowAtTwo = decideRecoveryAction(context({ customerValue: "LOW", messagesSent: 2 }));
+    expect(standardAtTwo.action).toBe("ESCALATE_TO_HUMAN");
+    expect(lowAtTwo.action).toBe("SCHEDULE_FOLLOW_UP");
+  });
+
+  it("still ignores customer value when the failure is a hard decline — no point waiting regardless of who it is", () => {
+    const highValue = decideRecoveryAction(context({ customerValue: "HIGH", failureCategory: "ISSUER_DECLINE" }));
+    const lowValue = decideRecoveryAction(context({ customerValue: "LOW", failureCategory: "ISSUER_DECLINE" }));
+
+    expect(highValue.action).toBe("GENERATE_PAYMENT_LINK");
+    expect(lowValue.action).toBe("GENERATE_PAYMENT_LINK");
+  });
+
+  it("names the customer tier and relationship in its reasoning, for auditability", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "HIGH", relationshipAgeDays: 365, successfulPayments: 12 })
+    );
+    expect(decision.reason).toMatch(/high-value/i);
+    expect(decision.reason).toMatch(/365-day/);
+  });
+});
