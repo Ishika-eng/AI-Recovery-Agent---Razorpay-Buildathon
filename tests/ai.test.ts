@@ -23,6 +23,7 @@ function context(overrides: {
   failureCategory?: RecoveryCaseContext["paymentHistory"][number]["failureCategory"];
   referenceType?: string;
   providerHealth?: RecoveryCaseContext["providerHealth"];
+  paymentHistory?: RecoveryCaseContext["paymentHistory"];
 }): RecoveryCaseContext {
   return {
     obligation: {
@@ -37,7 +38,9 @@ function context(overrides: {
       successfulPayments: overrides.successfulPayments ?? 0,
       customerValue: overrides.customerValue,
     },
-    paymentHistory: [{ provider: "razorpay", status: "FAILED", failureCategory: overrides.failureCategory ?? "TIMEOUT" }],
+    paymentHistory: overrides.paymentHistory ?? [
+      { provider: "razorpay", status: "FAILED", failureCategory: overrides.failureCategory ?? "TIMEOUT" },
+    ],
     recoveryHistory: {
       messagesSent: overrides.messagesSent ?? 0,
       retryCount: 1,
@@ -202,5 +205,63 @@ describe("decideRecoveryAction — checkout drop-off recovery (cart abandonment)
       context({ customerValue: "STANDARD", failureCategory: "USER_DROPOFF", messagesSent: 1 })
     );
     expect(decision.action).not.toBe("GENERATE_PAYMENT_LINK");
+  });
+});
+
+describe("decideRecoveryAction — mandate retry sequencer (UPI Autopay / e-mandate)", () => {
+  it("retries a mandate execution normally within NPCI's retry budget", () => {
+    const decision = decideRecoveryAction(
+      context({
+        customerValue: "STANDARD",
+        paymentHistory: [{ provider: "razorpay", status: "FAILED", failureCategory: "GATEWAY_ERROR", paymentMethod: "emandate" }],
+      })
+    );
+    // Within the retry budget, ordinary category-driven logic still
+    // applies (GATEWAY_ERROR looks transient) — not the mandate-exhaustion path.
+    expect(decision.action).toBe("WAIT");
+  });
+
+  it("stops retrying and asks for re-authorization once the mandate retry cap is exhausted", () => {
+    const decision = decideRecoveryAction(
+      context({
+        customerValue: "STANDARD",
+        paymentHistory: [
+          { provider: "razorpay", status: "FAILED", failureCategory: "GATEWAY_ERROR", paymentMethod: "emandate" },
+          { provider: "razorpay", status: "FAILED", failureCategory: "GATEWAY_ERROR", paymentMethod: "emandate" },
+        ],
+      })
+    );
+    expect(decision.action).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
+    expect(decision.reason).toMatch(/mandate/i);
+    expect(decision.reason).toMatch(/NPCI/i);
+  });
+
+  it("counts every failed mandate attempt toward the cap regardless of failure category", () => {
+    const decision = decideRecoveryAction(
+      context({
+        customerValue: "STANDARD",
+        paymentHistory: [
+          { provider: "razorpay", status: "FAILED", failureCategory: "INSUFFICIENT_FUNDS", paymentMethod: "emandate" },
+          { provider: "razorpay", status: "FAILED", failureCategory: "TIMEOUT", paymentMethod: "emandate" },
+        ],
+      })
+    );
+    // The second failure exhausts the cap even though the two failures
+    // were for entirely different reasons — the constraint is attempt
+    // count, not category.
+    expect(decision.action).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
+  });
+
+  it("does not apply mandate retry limits to an ordinary card payment", () => {
+    const decision = decideRecoveryAction(
+      context({
+        customerValue: "STANDARD",
+        paymentHistory: [
+          { provider: "razorpay", status: "FAILED", failureCategory: "GATEWAY_ERROR", paymentMethod: "card" },
+          { provider: "razorpay", status: "FAILED", failureCategory: "GATEWAY_ERROR", paymentMethod: "card" },
+        ],
+      })
+    );
+    expect(decision.action).not.toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
   });
 });
