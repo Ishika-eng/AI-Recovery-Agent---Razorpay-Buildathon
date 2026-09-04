@@ -57,7 +57,7 @@ export default async function DashboardPage() {
   if (!merchant) redirect("/api/auth/clear-session");
   if (!merchant.termsAcceptedAt) redirect("/onboarding");
 
-  const [obligations, pendingActions, recentAudit, recoveryActionsPrevented, allAttempts, openCases, resolvedObligations, attributedSum] =
+  const [obligations, pendingActions, recentAudit, recoveryActionsPrevented, allAttempts, openCases, resolvedObligations, attributedSum, aiVsBaselineActions] =
     await Promise.all([
       db.paymentObligation.findMany({ where: { merchantId: merchant.id }, orderBy: { createdAt: "desc" } }),
       db.recoveryAction.findMany({
@@ -86,6 +86,15 @@ export default async function DashboardPage() {
       db.recoveryAction.aggregate({
         _sum: { recoveredPaise: true },
         where: { recoveredPaise: { not: null }, case: { obligation: { merchantId: merchant.id, status: "PAID" } } },
+      }),
+      // AI-vs-rules defensibility (PRD Problem 37): every AI proposal also
+      // carries what a naive, fixed-schedule dunning rule would have done
+      // instead (never executed — see decideNaiveBaseline in
+      // src/lib/baseline.ts) so the value of the calibrated AI layer can be
+      // shown concretely rather than just asserted.
+      db.recoveryAction.findMany({
+        where: { proposedBy: "AI", baselineAction: { not: null }, case: { obligation: { merchantId: merchant.id } } },
+        select: { actionType: true, baselineAction: true },
       }),
     ]);
 
@@ -118,6 +127,21 @@ export default async function DashboardPage() {
   const suspectedOutageAudit = recentAudit.find(
     (log) => /suspected provider outage/i.test(log.reasoning) && isWithinLastMs(log.createdAt, OUTAGE_ALERT_WINDOW_MS)
   );
+
+  // AI-vs-rules defensibility (PRD Problem 37): how often, and to what,
+  // did the calibrated AI decide differently than the naive fixed-schedule
+  // baseline would have? A 0% divergence rate would be an honest signal
+  // that the calibration layer isn't actually earning its complexity.
+  const aiVsBaselineTotal = aiVsBaselineActions.length;
+  const divergentActions = aiVsBaselineActions.filter((a) => a.actionType !== a.baselineAction);
+  const divergenceRate = aiVsBaselineTotal > 0 ? (divergentActions.length / aiVsBaselineTotal) * 100 : 0;
+  const divergenceBreakdown = Object.entries(
+    divergentActions.reduce<Record<string, number>>((acc, a) => {
+      const key = `${a.baselineAction} → ${a.actionType}`;
+      acc[key] = (acc[key] ?? 0) + 1;
+      return acc;
+    }, {})
+  ).sort((a, b) => b[1] - a[1]);
 
   const byFailureType = Object.entries(
     allAttempts
@@ -173,6 +197,12 @@ export default async function DashboardPage() {
             value={String(recoveryActionsPrevented)}
             accent="text-indigo-600"
             hint="Reminders/links cancelled because the customer already paid"
+          />
+          <StatTile
+            label="AI vs. fixed-schedule rules"
+            value={aiVsBaselineTotal > 0 ? `${divergenceRate.toFixed(0)}% diverged` : "No data yet"}
+            accent="text-violet-600"
+            hint={`${divergentActions.length} of ${aiVsBaselineTotal} AI decisions chose differently than a naive fixed-schedule rule would have — never executed, recorded only for comparison`}
           />
         </section>
 
@@ -356,6 +386,35 @@ export default async function DashboardPage() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-base font-semibold">AI vs. a fixed-schedule rule</h2>
+          <p className="mb-3 text-sm text-neutral-500">
+            Every AI decision is compared against what a naive, fixed-schedule dunning rule (reminder → link →
+            give up, with no calibration or lifecycle/outage awareness) would have proposed instead — the
+            baseline is recorded for comparison only and is never executed. This is where the AI actually earns
+            its complexity.
+          </p>
+          <div className="rounded border border-neutral-200 bg-white p-4">
+            {divergentActions.length === 0 ? (
+              <p className="text-sm text-neutral-500">
+                {aiVsBaselineTotal === 0 ? "No decisions recorded yet." : "The AI hasn't diverged from the fixed-schedule rule yet."}
+              </p>
+            ) : (
+              <div className="space-y-2 text-sm">
+                {divergenceBreakdown.map(([transition, count]) => (
+                  <div key={transition} className="flex items-center justify-between">
+                    <span className="text-neutral-600">
+                      Rule would <span className="font-medium">{transition.split(" → ")[0]}</span> — AI instead{" "}
+                      <span className="font-medium text-violet-700">{transition.split(" → ")[1]}</span>
+                    </span>
+                    <span className="font-medium">{count}×</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
