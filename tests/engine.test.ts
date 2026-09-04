@@ -1380,3 +1380,58 @@ describe("promise-to-pay tracker — a real trigger, and a real consequence for 
     expect(latestAction.actionType).not.toBe("ESCALATE_TO_HUMAN");
   });
 });
+
+describe("Hinglish voice recovery — a real, ready-to-use script for a high-value relationship, end to end", () => {
+  it("recommends voice outreach with an embedded Hinglish script once automated attempts stop being productive", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    // Two touches happen back-to-back in this test with no real time
+    // passing between them — disable the minimum contact gap so the
+    // second touch isn't blocked on timing, which isn't what this test
+    // is about.
+    const merchant = await createMerchant({ minMessageGapHours: 0 });
+    const customerId = "cust_high_voice_1";
+    // 10 prior PAID obligations is what GenericEcommerceAdapter.getCustomerContext
+    // treats as a HIGH-value customer.
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        db.paymentObligation.create({
+          data: {
+            merchantId: merchant.id,
+            referenceType: "ORDER",
+            referenceId: `ORDER_VOICE_HISTORY_${i}`,
+            customerId,
+            originalAmountPaise: 100000,
+            outstandingAmountPaise: 0,
+            status: "PAID",
+          },
+        })
+      )
+    );
+    const obligation = await db.paymentObligation.create({
+      data: {
+        merchantId: merchant.id,
+        referenceType: "ORDER",
+        referenceId: "ORDER_VOICE_TARGET",
+        customerId,
+        originalAmountPaise: 100000,
+        outstandingAmountPaise: 100000,
+        status: "UNPAID",
+      },
+    });
+
+    // First hard decline: generates a payment link immediately, which
+    // auto-executes (amount is well under the auto-approve ceiling) and
+    // brings messagesSent to 1.
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_voice_1", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "CARD_DECLINED", errorDescription: "Card was declined" });
+    // Second failure: with messagesSent already at 1 (this tier's limit),
+    // the next cycle should recommend voice outreach instead of a bare
+    // escalation.
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_voice_2", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "CARD_DECLINED", errorDescription: "Card was declined" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const lastAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(lastAction.actionType).toBe("RECOMMEND_VOICE_OUTREACH");
+    expect(lastAction.reason).toMatch(/Namaste/);
+    expect(lastAction.policyResult).toBe("REQUIRES_APPROVAL");
+  });
+});
