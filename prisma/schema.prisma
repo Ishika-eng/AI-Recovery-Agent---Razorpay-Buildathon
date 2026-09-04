@@ -67,6 +67,7 @@ model PaymentObligation {
   originalAmountPaise    Int
   outstandingAmountPaise Int
   refundedAmountPaise    Int @default(0) // cumulative — reverses the "recovered" stats without rewriting RecoveryAction history
+  excessPaidAmountPaise  Int @default(0) // set when a payment overshoots what was owed — flagged, never silently counted as extra recovered revenue
   currency               String @default("INR")
 
   status String @default("UNPAID")
