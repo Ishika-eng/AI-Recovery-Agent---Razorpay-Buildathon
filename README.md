@@ -568,6 +568,93 @@ threshold is blocked on fraud grounds — the AI's own reasoning still
 visibly cites the outage in the audit trail, but the Policy Engine's fraud
 check wins the actual blocking decision, unconditionally.
 
+## Checkout drop-off and overdue B2B receivables — recovery without a provider event
+
+Every trigger above reacts to something a provider actually reported. But
+a real share of lost revenue never produces a provider event at all: a
+checkout gets opened and abandoned before a payment method is ever
+submitted, or a B2B invoice simply sits unpaid with nobody attempting to
+pay it. `USER_DROPOFF` was already a supported failure category with
+nothing that ever triggered it — neither provider adapter ever calls
+`classifyFailure` with `hadPaymentAttempt: false`.
+
+`detectSilentObligations()` (`src/lib/silentObligations.ts`) closes this,
+checked on every cron tick alongside `processDueCases()`: any obligation
+with zero `PaymentAttempt` rows that's gone quiet past a threshold — 30
+minutes for an `ORDER` with no `dueDate` (checkout abandonment), or past
+its `dueDate` for an `INVOICE` (an overdue receivable) — gets a synthetic
+marker attempt and a real recovery cycle, through the exact same
+`runRecoveryCycle` path every other trigger uses. The two get genuinely
+different treatment once they enter the AI, not just a different label:
+
+- **Abandoned checkout** — no instrument to diagnose, nothing in flight
+  to wait on, and abandonment intent decays fast, so the AI skips
+  straight to a direct payment link on the very first touch instead of a
+  reminder with no way to act on it.
+- **Overdue invoice** — an unanswered reminder here is a collections
+  signal, not a technical problem more automated pings will fix, so it
+  escalates to a human after just one automated touch rather than working
+  through the usual customer-value-scaled message budget.
+
+## Mandate retry sequencer — UPI Autopay follows NPCI's rules, not a card's
+
+A failed UPI Autopay / e-mandate debit isn't a one-off card charge. NPCI
+caps how many times a recurring mandate execution can be retried, far
+tighter than the generous budget every other instrument gets here — and
+once that cap is exhausted, a plain `GENERATE_PAYMENT_LINK` doesn't fix
+anything, since the mandate itself needs fresh customer authorization,
+not another nudge at the same failed debit.
+
+The AI now tracks mandate-specific attempts (`paymentMethod` is threaded
+into `RecoveryCaseContext.paymentHistory` for exactly this) separately
+from the generous retry budget every other instrument gets: every failed
+attempt on a UPI Autopay/e-mandate payment method counts toward a
+1-retry cap **regardless of why it failed** — the constraint NPCI
+actually enforces is attempt count, not failure category. Once
+exhausted, the AI proposes `OFFER_ALTERNATIVE_PAYMENT_METHOD` — re-
+authorize the mandate or provide a different method — instead of
+retrying a debit that structurally cannot succeed again.
+
+## Promise-to-pay tracker — a real trigger, and a real consequence for breaking one
+
+`RECORD_PROMISE_TO_PAY` already had real execution behavior (park the
+case 24h, then re-verify) but was entirely unreachable: the AI never
+proposes it — a promise made on a call is something only a human can
+hear — and there was no route or button either. `recordPromiseToPay()`
+(`src/lib/engine.ts`) is that real trigger, exposed as a "Record promise
+to pay" control on any active case, following the same pattern as
+opt-out and write-off.
+
+The dashboard's **Promise-to-pay tracker** section computes, live, how
+many promises were **kept** (the obligation was paid at or after the
+promise), **broken** (the 24h window passed with it still unresolved),
+or still **pending** — a real query over `RECORD_PROMISE_TO_PAY` actions
+and their obligations' resolution timing, not a claimed metric. And a
+broken promise has a real consequence: the next recovery cycle escalates
+straight to a human instead of proposing another automated reminder,
+because a customer who already broke one promise on this case is a trust
+signal worth a person's judgment.
+
+## Hinglish voice recovery — an honest scope: no telephony, a real script
+
+This platform has no calling/IVR integration — no telephony keys, no PSTN
+access — and it does not place real calls or pretend to. What's honest to
+build without that is the AI-judgment half of a voice channel: deciding
+*when* a personal call is worth more than another automated message, and
+drafting *what a human would actually say*.
+
+For a HIGH-value relationship, the moment automated attempts stop being
+productive (this tier's message limit) is exactly the moment a personal
+touch outweighs a bare hand-off. Instead of a plain `ESCALATE_TO_HUMAN`,
+the AI proposes `RECOMMEND_VOICE_OUTREACH` with a real, usable Hinglish
+call script attached (`generateHinglishVoiceScript()`,
+`src/lib/voiceScript.ts`) — referencing the actual amount owed, offering
+a concrete next step (a fresh payment link), and written in a natural
+Hinglish register rather than stiff transliterated English. It always
+requires merchant approval, same as any escalation — a phone call is a
+bigger commitment than an email, and a human decides whether to actually
+place it.
+
 ## Testing
 
 ```bash
@@ -618,6 +705,14 @@ Stated plainly, not hidden in the code:
   text a customer when a phone number was provided at link creation, but
   the platform doesn't independently send SMS/WhatsApp for a plain
   `SEND_REMINDER`.
+- **No real telephony/IVR integration** — `RECOMMEND_VOICE_OUTREACH`
+  generates a real, usable Hinglish call script (see above), but no call
+  is actually placed by this platform; a human executes it.
+- **`detectSilentObligations()`'s thresholds are fixed, not per-merchant
+  configurable** — 30 minutes for checkout abandonment, an invoice's own
+  `dueDate` for receivables. A real deployment would likely want these
+  tunable per merchant, the same way retry caps and contact windows
+  already are.
 - **Customer-value calibration is two levers, not a full re-weighting**:
   wait duration and escalation threshold scale with customer value; the
   *choice* between `SEND_REMINDER` / `GENERATE_PAYMENT_LINK` /
@@ -631,6 +726,8 @@ Stated plainly, not hidden in the code:
 
 Everything *not* listed above as a gap — dispute holds, customer opt-out,
 refunds/chargebacks, partial payment/overpayment, payment-method
-lifecycle, provider-outage detection, AI-vs-rules metrics, and
-suspected-fraud detection — is implemented, tested, and verified live
-against a running server, not just described. Section by section, above.
+lifecycle, provider-outage detection, AI-vs-rules metrics, suspected-fraud
+detection, checkout drop-off and overdue-receivables recovery, the
+mandate retry sequencer, the promise-to-pay tracker, and Hinglish voice
+recovery — is implemented, tested, and verified live against a running
+server, not just described. Section by section, above.
