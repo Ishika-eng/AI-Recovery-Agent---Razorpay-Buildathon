@@ -377,6 +377,25 @@ OFFER_ALTERNATIVE_PAYMENT_METHOD" on an expired card. A 0% divergence rate
 would be an honest signal the calibration isn't earning its keep; this
 makes that claim checkable instead of asserted.
 
+## Suspected-fraud detection — card testing isn't a struggling customer
+
+A genuine customer fails a payment once, maybe twice — a wrong CVV, an
+expired card, a bank decline. Five or more distinct payment attempts
+against the *same* obligation within 10 minutes looks like something
+else: card testing, someone iterating through stolen card numbers
+against a single order to find one that clears.
+
+`detectSuspiciousVelocity()` (`src/lib/fraud.ts`) checks this on every
+recovery cycle, the same way outage detection does — not just at
+ingestion. Once the threshold is crossed, the case's `riskLevel` becomes
+`FRAUD_SUSPECTED`, every pending action is blocked, and the Policy Engine
+now refuses *everything* customer-facing for that case (mirroring how an
+active dispute is handled) — because generating another payment link for
+a case under card testing would just hand the attacker more attempts. It
+takes an explicit human review to move the case forward again. The
+dashboard flags this with a red "Suspected fraud" badge next to the case
+status.
+
 ## Testing
 
 ```bash
@@ -394,15 +413,18 @@ end to end.
 
 The PRD's "real-world problems" checklist is broader than what's wired up
 end to end. **Refunds**, **partial payments/overpayment**, **payment-
-method lifecycle** (expired cards), **provider-outage detection**, and
-**AI-vs-rules defensibility metrics** are now handled (see "Refunds and
-chargebacks", "Partial payment and overpayment", "Payment-method
-lifecycle", "Provider-outage detection", and "AI vs. rules" above — the
-payment-method lifecycle section has one known gap around subscription
-correlation, noted there). There's no fraud/suspicious-pattern detection,
-and outbound provider/merchant API calls aren't modeled (everything is
-webhook-driven), so failure handling for those
-calls doesn't apply yet.
+method lifecycle** (expired cards), **provider-outage detection**,
+**AI-vs-rules defensibility metrics**, and **suspected-fraud detection**
+are now handled (see "Refunds and chargebacks", "Partial payment and
+overpayment", "Payment-method lifecycle", "Provider-outage detection",
+"AI vs. rules", and "Suspected-fraud detection" above — the payment-
+method lifecycle section has one known gap around subscription
+correlation, noted there). The fraud signal is deliberately narrow
+(rapid repeated attempts on one obligation) — it doesn't model stolen-
+card reuse across different obligations/customers, since no card
+fingerprint is captured anywhere in this system. Outbound
+provider/merchant API calls aren't modeled (everything is webhook-
+driven), so failure handling for those calls doesn't apply yet.
 
 **Dispute holds** and **customer opt-out** are no longer guardrails
 without a trigger:
