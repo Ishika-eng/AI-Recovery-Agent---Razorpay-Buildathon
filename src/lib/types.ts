@@ -12,6 +12,7 @@ export const FAILURE_CATEGORIES = [
   "GATEWAY_ERROR",
   "NETWORK_ERROR",
   "USER_DROPOFF",
+  "RECEIVABLE_OVERDUE",
   "UNKNOWN",
 ] as const;
 export const FailureCategory = z.enum(FAILURE_CATEGORIES);
