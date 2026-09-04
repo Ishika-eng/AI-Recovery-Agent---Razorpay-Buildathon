@@ -63,6 +63,35 @@ async function pushRazorpayDispute(merchantId: string, opts: Parameters<typeof r
   return ingestProviderEvent("razorpay", razorpayDisputeBody(opts), new Headers(), merchantId);
 }
 
+function razorpayPaymentLinkPaidBody(opts: { linkId: string; obligationId: string; amountPaise: number }) {
+  return JSON.stringify({
+    event: "payment_link.paid",
+    payload: {
+      payment_link: {
+        entity: { id: opts.linkId, reference_id: opts.obligationId, amount: opts.amountPaise, amount_paid: opts.amountPaise, currency: "INR" },
+      },
+      payment: { entity: { id: `pay_via_${opts.linkId}`, amount: opts.amountPaise, method: "upi" } },
+    },
+  });
+}
+
+async function pushRazorpayPaymentLinkPaid(merchantId: string, opts: Parameters<typeof razorpayPaymentLinkPaidBody>[0]) {
+  return ingestProviderEvent("razorpay", razorpayPaymentLinkPaidBody(opts), new Headers(), merchantId);
+}
+
+function razorpayRefundedBody(opts: { paymentId: string; amountPaise: number; amountRefundedPaise: number }) {
+  return JSON.stringify({
+    event: "payment.refunded",
+    payload: {
+      payment: { entity: { id: opts.paymentId, amount: opts.amountPaise, amount_refunded: opts.amountRefundedPaise, currency: "INR" } },
+    },
+  });
+}
+
+async function pushRazorpayRefund(merchantId: string, opts: Parameters<typeof razorpayRefundedBody>[0]) {
+  return ingestProviderEvent("razorpay", razorpayRefundedBody(opts), new Headers(), merchantId);
+}
+
 beforeEach(async () => {
   await resetDb();
 });
@@ -514,5 +543,145 @@ describe("write-off — the terminal state a stuck case had no way to reach", ()
 
     expect(countAfterFirst).toBe(1);
     expect(countAfterSecond).toBe(1); // second call is a no-op, already CANCELLED
+  });
+});
+
+describe("attribution — crediting the action that actually caused a recovery", () => {
+  it("credits the specific RecoveryAction whose payment link was paid", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_ATTR_1", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+    const action = await db.recoveryAction.create({
+      data: {
+        caseId: recoveryCase.id,
+        actionType: "GENERATE_PAYMENT_LINK",
+        reason: "test fixture",
+        executionStatus: "EXECUTED",
+        executedAt: new Date(),
+        deliveryChannel: "razorpay_payment_link",
+        deliveryRef: "plink_test_attr_1", // what a real createPaymentLink() call would have stored
+      },
+    });
+
+    const result = await pushRazorpayPaymentLinkPaid(merchant.id, {
+      linkId: "plink_test_attr_1",
+      obligationId: obligation.referenceId,
+      amountPaise: 100000,
+    });
+    expect(result.status).toBe("processed");
+
+    const updatedObligation = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updatedObligation.status).toBe("PAID");
+
+    const updatedAction = await db.recoveryAction.findUniqueOrThrow({ where: { id: action.id } });
+    expect(updatedAction.recoveredPaise).toBe(100000);
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "OBLIGATION_RESOLVED" } });
+    expect(log.reasoning).toMatch(/confirmed attributable/i);
+  });
+
+  it("does not attribute a resolution to an unrelated action's link id", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_ATTR_2", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+    const action = await db.recoveryAction.create({
+      data: {
+        caseId: recoveryCase.id,
+        actionType: "GENERATE_PAYMENT_LINK",
+        reason: "test fixture",
+        executionStatus: "EXECUTED",
+        executedAt: new Date(),
+        deliveryChannel: "razorpay_payment_link",
+        deliveryRef: "plink_never_paid",
+      },
+    });
+
+    // Customer paid through a *different* link — e.g. one from another
+    // channel entirely — never one this platform generated for this case.
+    await pushRazorpayPaymentLinkPaid(merchant.id, {
+      linkId: "plink_completely_unrelated",
+      obligationId: obligation.referenceId,
+      amountPaise: 100000,
+    });
+
+    const updatedObligation = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updatedObligation.status).toBe("PAID"); // still resolves — just honestly, not attributed
+
+    const unchangedAction = await db.recoveryAction.findUniqueOrThrow({ where: { id: action.id } });
+    expect(unchangedAction.recoveredPaise).toBeNull();
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "OBLIGATION_RESOLVED" } });
+    expect(log.reasoning).toMatch(/not attributed/i);
+  });
+
+  it("never attributes a cross-channel (external) resolution to any action", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_ATTR_3", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+    const action = await db.recoveryAction.create({
+      data: {
+        caseId: recoveryCase.id,
+        actionType: "GENERATE_PAYMENT_LINK",
+        reason: "test fixture",
+        executionStatus: "EXECUTED",
+        deliveryChannel: "razorpay_payment_link",
+        deliveryRef: "plink_irrelevant",
+      },
+    });
+
+    await resolveExternalPayment(obligation.id, "ext_ref_1");
+
+    const unchangedAction = await db.recoveryAction.findUniqueOrThrow({ where: { id: action.id } });
+    expect(unchangedAction.recoveredPaise).toBeNull();
+  });
+});
+
+describe("refunds and chargebacks — the metrics must reverse, not just the money", () => {
+  it("marks an obligation REFUNDED on a full refund, which removes it from the recovered total", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_REFUND_FULL", amountPaise: 100000 });
+    await db.paymentAttempt.create({
+      data: { obligationId: obligation.id, provider: "razorpay", providerPaymentId: "pay_refund_full", amountPaise: 100000, status: "SUCCEEDED" },
+    });
+    await db.paymentObligation.update({ where: { id: obligation.id }, data: { status: "PAID", outstandingAmountPaise: 0, resolvedAt: new Date() } });
+
+    const result = await pushRazorpayRefund(merchant.id, { paymentId: "pay_refund_full", amountPaise: 100000, amountRefundedPaise: 100000 });
+    expect(result.status).toBe("processed");
+    if (result.status !== "processed") throw new Error("unreachable");
+    expect(result.result).toBe("refund_issued");
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("REFUNDED");
+    expect(updated.refundedAmountPaise).toBe(100000);
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "REFUND_ISSUED" } });
+    expect(log.reasoning).toMatch(/no longer counts toward recovered revenue/i);
+  });
+
+  it("a partial refund reduces the recovered amount without changing status", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_REFUND_PARTIAL", amountPaise: 100000 });
+    await db.paymentAttempt.create({
+      data: { obligationId: obligation.id, provider: "razorpay", providerPaymentId: "pay_refund_partial", amountPaise: 100000, status: "SUCCEEDED" },
+    });
+    await db.paymentObligation.update({ where: { id: obligation.id }, data: { status: "PAID", outstandingAmountPaise: 0, resolvedAt: new Date() } });
+
+    await pushRazorpayRefund(merchant.id, { paymentId: "pay_refund_partial", amountPaise: 100000, amountRefundedPaise: 30000 });
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("PAID"); // not fully reversed
+    expect(updated.refundedAmountPaise).toBe(30000);
+  });
+
+  it("routes to manual review instead of guessing when the refunded payment id has no matching attempt", async () => {
+    const merchant = await createMerchant();
+    const result = await pushRazorpayRefund(merchant.id, { paymentId: "pay_never_seen", amountPaise: 100000, amountRefundedPaise: 100000 });
+
+    expect(result.status).toBe("processed");
+    if (result.status !== "processed") throw new Error("unreachable");
+    expect(result.correlated).toBe(false);
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "CORRELATION_FAILED" } });
+    expect(log.reasoning).toMatch(/manual review/i);
   });
 });
