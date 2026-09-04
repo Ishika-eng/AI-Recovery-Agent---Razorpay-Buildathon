@@ -12,6 +12,10 @@ function formatPaise(paise: number) {
   return `₹${(paise / 100).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
 }
 
+function isWithinLastMs(date: Date, windowMs: number) {
+  return Date.now() - date.getTime() < windowMs;
+}
+
 const FAILURE_LABELS: Record<string, string> = {
   ISSUER_DECLINE: "Issuer decline",
   TIMEOUT: "Timeout",
@@ -106,6 +110,15 @@ export default async function DashboardPage() {
     const attemptProviders = new Set(allAttempts.filter((a) => a.obligationId === o.id).map((a) => a.provider));
     return (o.resolutionSource && attemptProviders.size > 1) || o.resolutionSource === "external";
   });
+  // PRD Problem 11: surface a suspected provider outage as a merchant-
+  // visible alert, not just something buried in the audit trail — the
+  // whole point of detecting it is that a human should know their
+  // provider might be down, not just that automated messaging paused.
+  const OUTAGE_ALERT_WINDOW_MS = 15 * 60 * 1000;
+  const suspectedOutageAudit = recentAudit.find(
+    (log) => /suspected provider outage/i.test(log.reasoning) && isWithinLastMs(log.createdAt, OUTAGE_ALERT_WINDOW_MS)
+  );
+
   const byFailureType = Object.entries(
     allAttempts
       .filter((a) => a.status === "FAILED")
@@ -132,6 +145,13 @@ export default async function DashboardPage() {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8 space-y-10">
+        {suspectedOutageAudit && (
+          <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <span className="font-semibold">Possible provider outage detected.</span>{" "}
+            {suspectedOutageAudit.reasoning} Automated customer contact is paused for affected cases until this
+            clears.
+          </div>
+        )}
         <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <StatTile label="₹ recovered" value={formatPaise(recoveredPaise)} accent="text-emerald-600" hint="Net of refunds — obligations currently PAID, minus any amount refunded back" />
           <StatTile
