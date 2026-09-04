@@ -264,6 +264,31 @@ history is never rewritten — the historical fact "this action caused a
 ₹5,000 payment" stays true even after a later refund; the dashboard nets it
 out going forward instead.
 
+## Partial payment and overpayment — resolution isn't all-or-nothing
+
+A payment doesn't have to match what's owed exactly. `resolveObligation()`
+now compares the amount actually paid against `outstandingAmountPaise` and
+branches three ways:
+
+- **Less than owed** — the obligation moves to `PARTIALLY_PAID`,
+  `outstandingAmountPaise` shrinks by the paid amount, and the recovery
+  case stays open (never auto-closed) so the platform keeps chasing the
+  remainder. A follow-up payment for the rest resolves it normally.
+- **Exactly what's owed** — resolves as before.
+- **More than owed** — still fully resolves (`PAID`,
+  `outstandingAmountPaise: 0`), but the excess is recorded on
+  `excessPaidAmountPaise` and logged as `OVERPAYMENT_DETECTED` for human
+  review — never silently folded into "₹ recovered." Attribution, when
+  present, still only credits the action for what was actually owed, not
+  the excess.
+
+Both `PAYMENT_SUCCEEDED` webhooks (via a real amount on the payment) and
+`resolveExternalPayment()` (an optional `amountPaise` argument, also
+exposed on `POST /api/webhooks/external`) support this — a bank transfer
+or other externally-reported payment can be partial too. The dashboard
+flags any resolved obligation with excess paid via an amber "Overpaid by
+₹X" badge next to its resolution source.
+
 ## Testing
 
 ```bash
@@ -280,15 +305,12 @@ end to end.
 ## Known limitations
 
 The PRD's "real-world problems" checklist is broader than what's wired up
-end to end. **Refunds** are now handled (see "Refunds and chargebacks"
-below), but **partial payments** and **overpayment** are not — schema
-support exists (`PARTIALLY_PAID`, `outstandingAmountPaise`) but no code
-path exercises it yet; resolution is still all-or-nothing on the payment
-side (refunds are the exception — they support partial amounts). There's
-no provider-outage anomaly detection, no fraud/suspicious-pattern
-detection, and outbound provider/merchant API calls aren't modeled
-(everything is webhook-driven), so failure handling for those calls
-doesn't apply yet.
+end to end. **Refunds** and **partial payments/overpayment** are now
+handled (see "Refunds and chargebacks" and "Partial payment and
+overpayment" above). There's no provider-outage anomaly detection, no
+fraud/suspicious-pattern detection, and outbound provider/merchant API
+calls aren't modeled (everything is webhook-driven), so failure handling
+for those calls doesn't apply yet.
 
 **Dispute holds** and **customer opt-out** are no longer guardrails
 without a trigger:
