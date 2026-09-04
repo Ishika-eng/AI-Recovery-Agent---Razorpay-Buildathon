@@ -945,6 +945,15 @@ export async function executeAction(actionId: string, waitMinutes?: number) {
       return finishExecution(actionId, obligation.merchantId, "Case escalated to merchant.");
     }
 
+    if (type === "RECOMMEND_VOICE_OUTREACH") {
+      // No telephony integration — nothing is actually dialed. The script
+      // was already generated at proposal time (see ai.ts) and is sitting
+      // in this action's `reason`; approving this just marks it as the
+      // merchant's plan of record for a human to act on.
+      await db.recoveryCase.update({ where: { id: recoveryCase.id }, data: { status: "ESCALATED" } });
+      return finishExecution(actionId, obligation.merchantId, "Voice outreach recommended with a ready script — a human should place the call.");
+    }
+
     if (type === "STOP_RECOVERY") {
       await db.recoveryCase.update({
         where: { id: recoveryCase.id },
