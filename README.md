@@ -201,6 +201,25 @@ Leave the Razorpay keys and SMTP vars blank and the platform behaves
 exactly as it did before — fully demoable with zero external credentials.
 Fill them in and the same decision loop starts having real-world effects.
 
+## Terminal states — closing a case, not just escalating it
+
+Escalation (`ESCALATE_TO_HUMAN`) puts a case in the approval queue, which
+is a real human decision point. But before, nothing actually *closed* a
+case — rejecting one proposed action just left it `ESCALATED` again, so a
+stuck case could sit there indefinitely with no way to mark it done.
+
+**Write off** (`src/lib/engine.ts` `writeOffObligation`, the "Write off"
+button on any active case) is that missing terminal state: a deliberate,
+human decision to stop pursuing an obligation, distinct from
+`resolveObligation()` (money actually arrived) and `STOP_RECOVERY` (the AI
+proposed pausing — not the same as a person giving up on it). It sets the
+obligation and case to `CANCELLED`, cancels anything still pending, and is
+idempotent — write-off never overrides a real resolution that already
+landed, and calling it twice doesn't double-log. Written-off obligations
+show up in the dashboard's "Recently closed" section alongside actual
+payments, with a distinct "Written off" badge, and correctly drag down
+(rather than inflate) the recovery-rate stat.
+
 ## Testing
 
 ```bash
