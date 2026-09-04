@@ -1043,3 +1043,122 @@ describe("suspected-fraud detection — rapid repeated failed attempts, not a st
     expect(targetCase.riskLevel).toBe("STANDARD");
   });
 });
+
+describe("negative/zero-amount payments — a non-positive amount is a data problem, not a transaction", () => {
+  it("ignores a zero-amount webhook payment instead of corrupting the outstanding balance", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_ZERO_AMOUNT", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    await pushRazorpayPaymentLinkPaid(merchant.id, { linkId: "plink_zero", obligationId: obligation.referenceId, amountPaise: 0 });
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("UNPAID");
+    expect(updated.outstandingAmountPaise).toBe(100000);
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "INVALID_PAYMENT_AMOUNT" } });
+    expect(log.reasoning).toMatch(/non-positive/i);
+  });
+
+  it("ignores a negative-amount webhook payment instead of inflating the outstanding balance", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_NEGATIVE_AMOUNT", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    await pushRazorpayPaymentLinkPaid(merchant.id, { linkId: "plink_negative", obligationId: obligation.referenceId, amountPaise: -50000 });
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("UNPAID");
+    // A naive "outstanding - paidAmount" without the guard would have
+    // INCREASED outstanding to 150000 for a negative payment.
+    expect(updated.outstandingAmountPaise).toBe(100000);
+  });
+
+  it("resolveExternalPayment ignores a non-positive amount and creates no attempt record for it", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_EXT_ZERO", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    await resolveExternalPayment(obligation.id, "ext_zero_1", 0);
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("UNPAID");
+    expect(updated.outstandingAmountPaise).toBe(100000);
+    expect(await db.paymentAttempt.count({ where: { obligationId: obligation.id } })).toBe(0);
+  });
+});
+
+describe("concurrency — two events racing for the same obligation", () => {
+  it("resolves an obligation exactly once when two successful payments race for it", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_RACE_SUCCESS", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    await Promise.all([
+      pushRazorpayPaymentLinkPaid(merchant.id, { linkId: "plink_race_a", obligationId: obligation.referenceId, amountPaise: 100000 }),
+      pushRazorpayPaymentLinkPaid(merchant.id, { linkId: "plink_race_b", obligationId: obligation.referenceId, amountPaise: 100000 }),
+    ]);
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("PAID");
+
+    // Both payments were individually real and get recorded as attempts,
+    // but only one of them may actually be credited as *the* resolution.
+    const resolvedLogs = await db.auditLog.findMany({ where: { merchantId: merchant.id, action: "OBLIGATION_RESOLVED" } });
+    expect(resolvedLogs.length).toBe(1);
+  });
+
+  it("resolves an obligation exactly once when an external payment and a provider webhook race for it", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_RACE_MIXED", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    await Promise.all([
+      resolveExternalPayment(obligation.id, "ext_race_mixed"),
+      pushRazorpayPaymentLinkPaid(merchant.id, { linkId: "plink_race_mixed", obligationId: obligation.referenceId, amountPaise: 100000 }),
+    ]);
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("PAID");
+
+    const resolvedLogs = await db.auditLog.findMany({ where: { merchantId: merchant.id, action: "OBLIGATION_RESOLVED" } });
+    expect(resolvedLogs.length).toBe(1);
+  });
+});
+
+describe("combined detection signals — outage and fraud on the same obligation at once", () => {
+  it("blocks the action on fraud grounds even when the AI's own reasoning is driven by a suspected outage", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const merchant = await createMerchant();
+    const [obligationA, obligationB, target] = await Promise.all(
+      ["ORDER_COMBINED_A", "ORDER_COMBINED_B", "ORDER_COMBINED_TARGET"].map((referenceId) =>
+        createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId, amountPaise: 100000 })
+      )
+    );
+
+    // Two other obligations each take one transient hit — enough, combined
+    // with the target's own failures below, to cross the outage threshold.
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_combined_a", obligationId: obligationA.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_combined_b", obligationId: obligationB.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    // Five transient failures on the target obligation itself: each one
+    // also counts toward the merchant-wide outage signal (crossed after
+    // the very first of these), and together they cross the target's own
+    // fraud-velocity threshold.
+    for (let i = 0; i < 5; i++) {
+      await pushRazorpayFailure(merchant.id, { paymentId: `pay_combined_target_${i}`, obligationId: target.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+    }
+
+    const targetCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: target.id } });
+    expect(targetCase.riskLevel).toBe("FRAUD_SUSPECTED");
+
+    const lastAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: targetCase.id }, orderBy: { createdAt: "desc" } });
+    // The AI's own proposal is still visibly driven by the outage signal...
+    expect(lastAction.reason).toMatch(/outage/i);
+    // ...but the policy layer blocks it on fraud grounds regardless —
+    // neither signal silently suppresses the other in the audit trail,
+    // and fraud wins the actual blocking decision.
+    expect(lastAction.policyResult).toBe("BLOCKED");
+    expect(lastAction.policyReasoning).toMatch(/fraud/i);
+  });
+});
