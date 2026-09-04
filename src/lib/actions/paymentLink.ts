@@ -50,7 +50,8 @@ export async function createPaymentLink(input: {
     return {
       channel: "razorpay_payment_link",
       simulated: false,
-      ref: link.short_url,
+      ref: link.id, // durable id — what a later payment_link.paid webhook will carry, for attribution
+      customerUrl: link.short_url,
       note: `Real Razorpay payment link created (${link.id}): ${link.short_url}`,
     };
   } catch (err) {
