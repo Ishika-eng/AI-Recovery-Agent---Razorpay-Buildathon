@@ -9,36 +9,6 @@ import GhostFibers from "@/components/GhostFibers";
 import { DashboardSidebarNav } from "@/components/DashboardSidebarNav";
 import { FailureBreakdownChart, ObligationStatusChart, RecoveryBreakdownChart } from "@/components/DashboardCharts";
 
-const NAV_ICONS = {
-  overview: (
-    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2.5" y="2.5" width="6" height="6" rx="1" />
-      <rect x="11.5" y="2.5" width="6" height="6" rx="1" />
-      <rect x="2.5" y="11.5" width="6" height="6" rx="1" />
-      <rect x="11.5" y="11.5" width="6" height="6" rx="1" />
-    </svg>
-  ),
-  history: (
-    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="10" cy="10" r="7.5" />
-      <path d="M10 6v4l3 2" />
-    </svg>
-  ),
-  insights: (
-    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="10" width="3" height="7" rx="0.6" />
-      <rect x="8.5" y="5" width="3" height="12" rx="0.6" />
-      <rect x="14" y="8" width="3" height="9" rx="0.6" />
-    </svg>
-  ),
-  setup: (
-    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M7 2.5v3M13 2.5v3M4.5 7h11l-1 5.5a5 5 0 01-9 0z" />
-      <path d="M7 15.5v2M13 15.5v2" />
-    </svg>
-  ),
-};
-
 export const dynamic = "force-dynamic";
 
 function formatPaise(paise: number) {
@@ -313,7 +283,6 @@ export default async function DashboardPage() {
             {
               id: "overview",
               label: "Overview",
-              icon: NAV_ICONS.overview,
               badge: pendingActions.length,
               content: (
                 <div className="space-y-10">
@@ -441,7 +410,6 @@ export default async function DashboardPage() {
             {
               id: "history",
               label: "History",
-              icon: NAV_ICONS.history,
               content: (
                 <div className="space-y-10">
                   <section>
@@ -534,7 +502,6 @@ export default async function DashboardPage() {
             {
               id: "insights",
               label: "Insights",
-              icon: NAV_ICONS.insights,
               content: (
                 <div className="space-y-10">
                   <section className="grid gap-6 sm:grid-cols-2">
@@ -593,7 +560,6 @@ export default async function DashboardPage() {
             {
               id: "setup",
               label: "Setup",
-              icon: NAV_ICONS.setup,
               content: (
                 <section>
                   <h2 className="mb-3 text-base font-semibold">Webhook integration</h2>

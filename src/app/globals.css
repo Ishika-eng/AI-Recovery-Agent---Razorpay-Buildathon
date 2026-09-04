@@ -226,22 +226,20 @@ a:active, button:active { transform: scale(.98) !important; }
 .dashboard-main { position: relative; z-index: 1; }
 .dashboard-app-shell { display: flex; align-items: flex-start; gap: 0; min-height: calc(100vh - 73px); }
 .dashboard-sidebar { position: sticky; top: 0; flex: 0 0 220px; width: 220px; height: calc(100vh - 73px); padding: 20px 12px; border-right: 1px solid rgba(132,145,196,.14); overflow-y: auto; }
-.dashboard-sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
-.dashboard-sidebar-item { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; border-radius: 8px; background: transparent; padding: 10px 12px; color: #9aa2c0; font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; text-align: left; transition: background .15s, color .15s; }
-.dashboard-sidebar-icon { display: flex; flex-shrink: 0; }
-.dashboard-sidebar-label { flex: 1; }
-.dashboard-sidebar-item:hover { background: rgba(255,255,255,.05); color: #dde1f2; }
-.dashboard-sidebar-item.is-active { background: linear-gradient(135deg, rgba(124,111,255,.24), rgba(124,111,255,.1)); color: #ffffff; box-shadow: inset 0 0 0 1px rgba(143,131,255,.35); }
-.dashboard-sidebar-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 999px; background: rgba(124,111,255,.32); color: #e2dfff; font-size: 10.5px; font-weight: 700; }
 .dashboard-content { flex: 1; min-width: 0; max-width: 1800px; margin: 0 auto; padding: 24px 28px 90px; }
 .dashboard-header-stack { display: flex; flex-direction: column; gap: 20px; margin-bottom: 28px; }
 .dashboard-content-section { animation: rise .35s ease both; }
 
+/* LineSidebar's marker rail bleeds outside its own box to the left and its
+   proximity effect needs room above/below each item to register — give it
+   a little breathing space beyond the plain padding used elsewhere. */
+.dashboard-sidebar .line-sidebar { padding-left: 4px; }
+.dashboard-sidebar .line-sidebar__index { font-weight: 600; }
+
 @media (max-width: 860px) {
   .dashboard-app-shell { flex-direction: column; }
-  .dashboard-sidebar { position: static; width: 100%; height: auto; padding: 10px 16px; border-right: 0; border-bottom: 1px solid rgba(132,145,196,.14); overflow-x: auto; overflow-y: visible; }
-  .dashboard-sidebar-nav { flex-direction: row; gap: 6px; }
-  .dashboard-sidebar-item { width: auto; white-space: nowrap; }
-  .dashboard-sidebar-label { flex: none; }
+  .dashboard-sidebar { position: static; width: 100%; height: auto; padding: 14px 16px; border-right: 0; border-bottom: 1px solid rgba(132,145,196,.14); overflow-x: auto; overflow-y: visible; }
+  .dashboard-sidebar .line-sidebar__list { flex-direction: row; gap: 28px; padding: 4px 0; }
+  .dashboard-sidebar .line-sidebar--markers .line-sidebar__item:not(:last-child)::after { display: none; }
   .dashboard-content { padding: 20px 16px 70px; }
 }
