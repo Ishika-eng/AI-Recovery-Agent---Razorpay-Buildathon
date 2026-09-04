@@ -161,6 +161,12 @@ model RecoveryAction {
   proposedBy String @default("AI") // AI | POLICY | MERCHANT | SYSTEM
   reason     String
 
+  // What a naive, fixed-schedule dunning rule (no calibration, no
+  // lifecycle/outage awareness) would have proposed for the same case —
+  // recorded for comparison only, never executed. See src/lib/baseline.ts
+  // and PRD Problem 37 (AI-vs-rules defensibility).
+  baselineAction String?
+
   policyResult    String? // ALLOWED | BLOCKED | REQUIRES_APPROVAL
   policyReasoning String?
 
