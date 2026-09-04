@@ -165,6 +165,12 @@ model RecoveryAction {
   executionStatus String @default("PROPOSED")
   recoveredPaise  Int?
 
+  // What actually happened when this action tried to reach the customer.
+  // deliveryChannel: razorpay_payment_link | email | simulated | not_configured
+  // deliveryRef: the payment link URL, the email message id, or null
+  deliveryChannel String?
+  deliveryRef     String?
+
   createdAt  DateTime  @default(now())
   decidedAt  DateTime?
   executedAt DateTime?
