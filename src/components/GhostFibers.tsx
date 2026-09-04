@@ -252,6 +252,12 @@ const GhostFibers = ({
     canvas.style.height = "100%";
     canvas.style.display = "block";
     canvas.setAttribute("aria-hidden", "true");
+    // Guaranteed non-black clear color matching the shader's own backdrop
+    // tone, so even if the fiber draw call fails to paint anything on some
+    // GPU/driver, the canvas reads as the intended dark backdrop rather than
+    // flat black.
+    gl.clearColor(0.070588, 0.058824, 0.090196, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
 
     let program: Program;
     let mesh: Mesh;
@@ -289,6 +295,15 @@ const GhostFibers = ({
         uGlowColor: { value: new Float32Array(hexToRgb("#3437A0")) },
       },
     });
+      // ogl's Program constructor logs shader compile/link failures to the
+      // console via warn (not throw), so a bad shader on some GPU/driver
+      // would otherwise leave a fully opaque, black canvas silently covering
+      // the page. Check link status explicitly so that case also falls
+      // through to the CSS fallback below.
+      const glProgram = (program as unknown as { program: WebGLProgram }).program;
+      if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(glProgram) || "shader link failed");
+      }
       mesh = new Mesh(gl, { geometry, program });
     } catch (error) {
       console.error("GhostFibers: shader setup failed, showing static fallback.", error);
