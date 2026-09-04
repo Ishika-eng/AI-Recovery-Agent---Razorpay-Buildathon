@@ -3,9 +3,11 @@ import { db } from "@/lib/db";
 import { getCurrentMerchant } from "@/lib/dal";
 import { advanceCase } from "@/lib/engine";
 
-// Manual "tick" for a WAITING case — stands in for a real scheduler/cron so
-// the state machine (PRD §21) can be demonstrated interactively: WAIT
-// elapsing, a follow-up coming due, a promise-to-pay date arriving.
+// Manual, immediate tick for one case — the human override. The autonomous
+// path is /api/cron/tick (src/lib/engine.ts processDueCases), which advances
+// every merchant's due cases on a schedule without anyone clicking anything;
+// this route exists so a merchant (or a demo) can force a specific case
+// forward right now instead of waiting for its nextActionAt.
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
