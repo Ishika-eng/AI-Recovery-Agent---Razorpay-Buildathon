@@ -407,7 +407,19 @@ npx tsc --noEmit
 Tests cover provider-agnostic correlation, idempotency (including that it's
 scoped per merchant, not global), AI proposal + policy gating, the mandatory
 pre-action verification path, and the cross-channel resolution scenario
-end to end.
+end to end. The two cross-obligation detectors (provider-outage,
+suspected-fraud) are tested at their exact trigger boundary (one below
+threshold vs. at threshold), not just an obvious "clearly not" case — and
+outage detection specifically has a test proving one merchant's failures
+can't trigger a false outage flag on a different merchant sharing the
+same provider.
+
+**Not covered by any test**: concurrent/race-condition webhook delivery
+(two events for the same obligation landing at once), multiple detection
+signals firing together on one obligation (e.g. mid-outage *and* over the
+fraud threshold simultaneously), and negative/zero-amount inputs on the
+partial-payment paths. These are plausible in production but out of
+scope for what this session verified.
 
 ## Known limitations
 
