@@ -22,8 +22,10 @@ type StripeEvent = {
         code?: string;
         message?: string;
       };
-      // Dispute objects only — the PaymentIntent id being disputed.
+      // Dispute and Charge objects only — the PaymentIntent id involved.
       payment_intent?: string;
+      // Charge objects only (charge.refunded).
+      amount_refunded?: number;
     };
   };
 };
@@ -69,6 +71,22 @@ export class StripeAdapter implements PaymentProviderAdapter {
         providerEventId: event.id,
         merchantId,
         disputedPaymentId: intent.payment_intent,
+      };
+    }
+
+    // PRD Problem 26 — same pattern as the dispute branch above: a Charge
+    // object carries the PaymentIntent id it belongs to, not the merchant's
+    // own reference, so this correlates through refundedPaymentId (a
+    // PaymentAttempt lookup) instead of metadata.
+    if (event.type === "charge.refunded") {
+      if (!intent.payment_intent) return null;
+      return {
+        eventType: "REFUND_ISSUED",
+        provider: "stripe",
+        providerEventId: event.id,
+        merchantId,
+        refundedPaymentId: intent.payment_intent,
+        refundAmountPaise: intent.amount_refunded ?? intent.amount,
       };
     }
 
