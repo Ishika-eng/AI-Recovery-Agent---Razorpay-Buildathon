@@ -18,6 +18,7 @@ function context(overrides: { status?: RecoveryCaseContext["obligation"]["status
       retryCount: 1,
       waitedAlready: false,
       lastActionAt: null,
+      brokenPromiseCount: 0,
     },
     providerHealth: { suspectedOutage: false, affectedObligations: 0, windowMinutes: 15 },
     allowedActions: ["WAIT", "VERIFY_PAYMENT", "SEND_REMINDER", "GENERATE_PAYMENT_LINK", "OFFER_ALTERNATIVE_PAYMENT_METHOD", "SCHEDULE_FOLLOW_UP", "RECORD_PROMISE_TO_PAY", "ESCALATE_TO_HUMAN", "STOP_RECOVERY"],

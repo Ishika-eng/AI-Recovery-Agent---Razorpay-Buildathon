@@ -24,6 +24,7 @@ function context(overrides: {
   referenceType?: string;
   providerHealth?: RecoveryCaseContext["providerHealth"];
   paymentHistory?: RecoveryCaseContext["paymentHistory"];
+  brokenPromiseCount?: number;
 }): RecoveryCaseContext {
   return {
     obligation: {
@@ -46,6 +47,7 @@ function context(overrides: {
       retryCount: 1,
       waitedAlready: overrides.waitedAlready ?? false,
       lastActionAt: null,
+      brokenPromiseCount: overrides.brokenPromiseCount ?? 0,
     },
     providerHealth: overrides.providerHealth ?? { suspectedOutage: false, affectedObligations: 0, windowMinutes: 15 },
     allowedActions: ALL_ACTIONS,
