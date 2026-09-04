@@ -85,6 +85,23 @@ export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
     }
   }
 
+  // Checkout drop-off (PRD §17 "USER_DROPOFF"): the customer never
+  // actually submitted a payment — there's no instrument to diagnose and
+  // nothing in flight that might land late, so the "wait, it might just
+  // be delayed" window that a transient failure gets doesn't apply here
+  // at all. A plain reminder with no way to act on it is also weaker than
+  // it needs to be — cart-abandonment intent decays fast, and the
+  // customer already demonstrated they were mid-checkout, so the highest-
+  // leverage first touch is handing them a direct way to finish, not a
+  // nudge that still requires them to navigate back to checkout on their
+  // own.
+  if (lastFailure?.failureCategory === "USER_DROPOFF" && recoveryHistory.messagesSent === 0) {
+    return propose({
+      action: "GENERATE_PAYMENT_LINK",
+      reason: `Checkout was abandoned before any payment was attempted for a ${customerDescriptor} — no instrument to diagnose and no in-flight payment to wait on, so sending a direct link to finish checkout while intent is still fresh, rather than a reminder they'd have to act on unprompted.`,
+    });
+  }
+
   // Hard decline / insufficient funds: retrying the same instrument won't
   // help, so go straight to offering a different one — no point waiting.
   const hardDecline = paymentHistory.some(
@@ -136,6 +153,18 @@ export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
     return propose({
       action: "GENERATE_PAYMENT_LINK",
       reason: `Wait window elapsed with no successful payment — generating a payment link for a ${customerDescriptor}.`,
+    });
+  }
+
+  // B2B receivables / overdue invoices: an invoice reminder that goes
+  // unanswered is a collections signal, not a technical problem more
+  // automated pings are likely to fix — this is a relationship-sensitive
+  // conversation that belongs with a human sooner than the usual
+  // customer-value-scaled message budget, regardless of tier.
+  if (lastFailure?.failureCategory === "RECEIVABLE_OVERDUE" && recoveryHistory.messagesSent >= 1) {
+    return propose({
+      action: "ESCALATE_TO_HUMAN",
+      reason: `Invoice reminder went unanswered for a ${customerDescriptor} — an unresponsive B2B receivable is a collections conversation, not something more automated attempts are likely to resolve, so escalating after just one automated touch instead of this tier's usual budget.`,
     });
   }
 
