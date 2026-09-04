@@ -24,6 +24,11 @@ const TOOLTIP_STYLE = {
   fontSize: 13,
   boxShadow: "0 12px 32px rgba(0,0,0,.4)",
 };
+// Recharts hardcodes each tooltip item's text to black by default and only
+// respects contentStyle for the box itself, so without this every tooltip
+// renders unreadable dark-on-dark text on this dark theme.
+const TOOLTIP_ITEM_STYLE = { color: "#f5f6ff" };
+const TOOLTIP_LABEL_STYLE = { color: "#c2c8de", marginBottom: 4 };
 const PIE_COLORS = ["#8f83ff", "#4d9bff", "#2fd0a4", "#f5b23f", "#ee6579", "#8b93b8"];
 
 const BREAKDOWN_COLORS: Record<string, string> = {
@@ -40,6 +45,8 @@ export function RecoveryBreakdownChart({ data }: { data: { name: string; value: 
         <YAxis stroke={AXIS} fontSize={12} tickLine={false} axisLine={false} width={52} tickFormatter={(v) => `₹${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`} />
         <Tooltip
           contentStyle={TOOLTIP_STYLE}
+          itemStyle={TOOLTIP_ITEM_STYLE}
+          labelStyle={TOOLTIP_LABEL_STYLE}
           cursor={{ fill: "rgba(124,111,255,.08)" }}
           formatter={(value) => [`₹${Number(value).toLocaleString("en-IN")}`, ""]}
         />
@@ -76,6 +83,8 @@ export function ObligationStatusChart({ data }: { data: { name: string; value: n
           </Pie>
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
+            itemStyle={TOOLTIP_ITEM_STYLE}
+            labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={(value, name) => [`${value} (${total > 0 ? ((Number(value) / total) * 100).toFixed(0) : 0}%)`, name]}
           />
         </PieChart>
@@ -99,7 +108,12 @@ export function FailureBreakdownChart({ data }: { data: { name: string; value: n
       <BarChart data={data} layout="vertical" margin={{ top: 0, right: 28, left: 0, bottom: 0 }}>
         <XAxis type="number" hide />
         <YAxis type="category" dataKey="name" stroke={AXIS} fontSize={12.5} tickLine={false} axisLine={false} width={120} />
-        <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "rgba(124,111,255,.1)" }} />
+        <Tooltip
+          contentStyle={TOOLTIP_STYLE}
+          itemStyle={TOOLTIP_ITEM_STYLE}
+          labelStyle={TOOLTIP_LABEL_STYLE}
+          cursor={{ fill: "rgba(124,111,255,.1)" }}
+        />
         <Bar dataKey="value" fill="#8f83ff" radius={[0, 4, 4, 0]} barSize={16} isAnimationActive={false}>
           <LabelList dataKey="value" position="right" fill="#e2e4f5" fontSize={12} fontWeight={600} />
         </Bar>
