@@ -43,9 +43,14 @@ const PROVIDER_LABELS: Record<string, string> = {
 export default async function DashboardPage() {
   // Defense in depth: proxy.ts already redirects unauthenticated requests
   // to /login optimistically, but the merchant-specific checks (session
-  // validity, terms acceptance) belong here, close to the data.
+  // validity, terms acceptance) belong here, close to the data. A missing
+  // merchant here despite a signed session cookie means the cookie is
+  // orphaned (e.g. it outlived a dev.db reset) — redirecting straight to
+  // /login would loop forever, since the proxy sees a still-valid
+  // signature and immediately bounces /login back to /dashboard. Routing
+  // through a handler that can actually clear the cookie breaks that loop.
   const merchant = await getCurrentMerchant();
-  if (!merchant) redirect("/login");
+  if (!merchant) redirect("/api/auth/clear-session");
   if (!merchant.termsAcceptedAt) redirect("/onboarding");
 
   const [obligations, pendingActions, recentAudit, recoveryActionsPrevented, allAttempts, openCases, resolvedObligations, attributedSum] =
