@@ -57,6 +57,7 @@ export class GenericEcommerceAdapter implements MerchantAdapter {
       "OFFER_ALTERNATIVE_PAYMENT_METHOD",
       "SCHEDULE_FOLLOW_UP",
       "RECORD_PROMISE_TO_PAY",
+      "RECOMMEND_VOICE_OUTREACH",
       "ESCALATE_TO_HUMAN",
       "STOP_RECOVERY",
     ];
