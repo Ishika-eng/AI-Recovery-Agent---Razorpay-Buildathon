@@ -1,6 +1,8 @@
 import Link from "next/link";
 import GhostFibers from "@/components/GhostFibers";
 import { DarkBodyBackground } from "@/components/DarkBodyBackground";
+import { LandingNav } from "@/components/LandingNav";
+import { ScrollReveal } from "@/components/ScrollReveal";
 
 const PRINCIPLES = [
   {
@@ -61,14 +63,7 @@ export default function LandingPage() {
       <header className="relative z-10 border-b border-white/10">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
           <span className="text-sm font-semibold tracking-tight">Universal Recovery</span>
-          <nav className="flex items-center gap-4 text-sm">
-            <Link href="/login" className="text-neutral-300 hover:text-white">
-              Sign in
-            </Link>
-            <Link href="/signup" className="rounded bg-white px-4 py-2 font-medium text-neutral-900 hover:bg-neutral-200">
-              Get started
-            </Link>
-          </nav>
+          <LandingNav />
         </div>
       </header>
 
@@ -96,7 +91,7 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="border-t border-white/10 py-16">
+        <ScrollReveal><section className="border-t border-white/10 py-16">
           <div className="mx-auto max-w-4xl px-6">
             <p className="text-center text-sm uppercase tracking-wide text-neutral-400">Works across</p>
             <div className="mt-6 grid gap-8 sm:grid-cols-2">
@@ -128,9 +123,9 @@ export default function LandingPage() {
               </div>
             </div>
           </div>
-        </section>
+        </section></ScrollReveal>
 
-        <section className="border-t border-white/10 px-6 py-16">
+        <ScrollReveal delay={80}><section className="border-t border-white/10 px-6 py-16">
           <div className="mx-auto max-w-5xl">
             <h2 className="text-center text-2xl font-semibold text-white">How universal recovery works</h2>
             <div className="mt-10 grid gap-6 sm:grid-cols-2">
@@ -142,9 +137,9 @@ export default function LandingPage() {
               ))}
             </div>
           </div>
-        </section>
+        </section></ScrollReveal>
 
-        <section className="border-t border-white/10 py-16 text-center">
+        <ScrollReveal delay={120}><section className="border-t border-white/10 py-16 text-center">
           <h2 className="text-2xl font-semibold text-white">Set it up in minutes.</h2>
           <p className="mx-auto mt-3 max-w-xl text-neutral-300">
             Create an account, accept what the agent is authorized to do, and point your provider webhooks at your
@@ -153,7 +148,7 @@ export default function LandingPage() {
           <Link href="/signup" className="mt-6 inline-block rounded bg-white px-6 py-3 text-sm font-medium text-neutral-900 hover:bg-neutral-100">
             Get started free
           </Link>
-        </section>
+        </section></ScrollReveal>
       </main>
 
       <footer className="relative z-10 border-t border-white/10 py-8 text-center text-xs text-neutral-500">
