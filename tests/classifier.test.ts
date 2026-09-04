@@ -37,6 +37,21 @@ describe("classifyFailure", () => {
     expect(result.failureCategory).toBe("ISSUER_DECLINE");
   });
 
+  it("classifies an expired card from the error code", () => {
+    const result = classifyFailure({ hadPaymentAttempt: true, errorCode: "EXPIRED_CARD" });
+    expect(result.failureCategory).toBe("EXPIRED_CARD");
+  });
+
+  it("classifies an expired card from the description, taking priority over a generic decline", () => {
+    const result = classifyFailure({ hadPaymentAttempt: true, errorCode: "CARD_DECLINED", errorDescription: "The card has expired" });
+    expect(result.failureCategory).toBe("EXPIRED_CARD");
+  });
+
+  it("classifies an expired card over a gateway/BAD_REQUEST_ERROR code", () => {
+    const result = classifyFailure({ hadPaymentAttempt: true, errorCode: "BAD_REQUEST_ERROR", errorDescription: "Your card has expired" });
+    expect(result.failureCategory).toBe("EXPIRED_CARD");
+  });
+
   it("classifies 'do not honour' as an issuer decline", () => {
     const result = classifyFailure({ hadPaymentAttempt: true, errorDescription: "Do not honour" });
     expect(result.failureCategory).toBe("ISSUER_DECLINE");
