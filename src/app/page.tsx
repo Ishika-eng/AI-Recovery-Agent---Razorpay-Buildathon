@@ -49,9 +49,10 @@ export default function LandingPage() {
               speed={0.18}
               scale={2.2}
               layers={4}
-              glowIntensity={1.4}
-              brightness={1.9}
-              vignette={0.85}
+              glowIntensity={0.85}
+              brightness={1.4}
+              blueBoost={1}
+              vignette={0.9}
               grain={0.04}
             />
           </div>
