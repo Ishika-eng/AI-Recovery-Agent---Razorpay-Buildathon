@@ -10,6 +10,7 @@ import {
   rejectAction,
   resolveExternalPayment,
   runRecoveryCycle,
+  writeOffObligation,
 } from "@/lib/engine";
 import { createMerchant, resetDb } from "./helpers";
 
@@ -464,5 +465,54 @@ describe("dispute handling — the real trigger, not just an unused guardrail", 
 
     const log = await db.auditLog.findFirstOrThrow({ where: { action: "CORRELATION_FAILED" } });
     expect(log.reasoning).toMatch(/manual review/i);
+  });
+});
+
+describe("write-off — the terminal state a stuck case had no way to reach", () => {
+  it("closes the obligation and case permanently, cancelling any pending action", async () => {
+    const merchant = await createMerchant({ autoApproveUnderPaise: 0 });
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_WRITEOFF", amountPaise: 100000 });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_1", obligationId: obligation.referenceId, amountPaise: 100000, errorDescription: "Card was declined by the issuing bank" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const pending = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    expect(pending.executionStatus).toBe("PENDING_APPROVAL");
+
+    const result = await writeOffObligation(obligation.id, "test: merchant gave up");
+    expect(result.status).toBe("CANCELLED");
+
+    const updatedCase = await db.recoveryCase.findUniqueOrThrow({ where: { id: recoveryCase.id } });
+    expect(updatedCase.status).toBe("CANCELLED");
+    expect(updatedCase.nextAction).toBeNull();
+
+    const updatedAction = await db.recoveryAction.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(updatedAction.executionStatus).toBe("POLICY_BLOCKED");
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "WRITE_OFF" } });
+    expect(log.actor).toBe("MERCHANT");
+    expect(log.reasoning).toMatch(/wrote off/i);
+  });
+
+  it("is idempotent and never overrides a real resolution", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_WRITEOFF_PAID", amountPaise: 100000 });
+
+    await resolveExternalPayment(obligation.id, "ext_1");
+
+    const result = await writeOffObligation(obligation.id, "test: too late, already paid");
+    expect(result.status).toBe("PAID"); // a real payment always wins — write-off never undoes it
+  });
+
+  it("does not create duplicate audit entries when called twice", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_WRITEOFF_TWICE", amountPaise: 100000 });
+
+    await writeOffObligation(obligation.id, "first");
+    const countAfterFirst = await db.auditLog.count({ where: { action: "WRITE_OFF" } });
+    await writeOffObligation(obligation.id, "second");
+    const countAfterSecond = await db.auditLog.count({ where: { action: "WRITE_OFF" } });
+
+    expect(countAfterFirst).toBe(1);
+    expect(countAfterSecond).toBe(1); // second call is a no-op, already CANCELLED
   });
 });
