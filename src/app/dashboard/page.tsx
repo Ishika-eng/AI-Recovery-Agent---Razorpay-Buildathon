@@ -64,7 +64,7 @@ export default async function DashboardPage() {
       orderBy: { createdAt: "desc" },
     }),
     db.paymentObligation.findMany({
-      where: { merchantId: merchant.id, status: "PAID" },
+      where: { merchantId: merchant.id, status: { in: ["PAID", "CANCELLED"] } },
       orderBy: { resolvedAt: "desc" },
       take: 10,
     }),
@@ -214,10 +214,10 @@ export default async function DashboardPage() {
         </section>
 
         <section>
-          <h2 className="mb-3 text-base font-semibold">Recently resolved</h2>
+          <h2 className="mb-3 text-base font-semibold">Recently closed</h2>
           {resolvedObligations.length === 0 ? (
             <p className="rounded border border-dashed border-neutral-300 bg-white p-6 text-center text-sm text-neutral-500">
-              Nothing resolved yet.
+              Nothing closed yet.
             </p>
           ) : (
             <div className="overflow-x-auto rounded border border-neutral-200 bg-white">
@@ -226,8 +226,8 @@ export default async function DashboardPage() {
                   <tr>
                     <th className="px-4 py-2">Obligation</th>
                     <th className="px-4 py-2">Amount</th>
-                    <th className="px-4 py-2">Resolved via</th>
-                    <th className="px-4 py-2">Resolved at</th>
+                    <th className="px-4 py-2">Outcome</th>
+                    <th className="px-4 py-2">Closed at</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -236,13 +236,17 @@ export default async function DashboardPage() {
                       <td className="px-4 py-3 font-medium">{o.referenceId}</td>
                       <td className="px-4 py-3">{formatPaise(o.originalAmountPaise)}</td>
                       <td className="px-4 py-3">
-                        <span
-                          className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-                            o.resolutionSource === "external" ? "bg-indigo-100 text-indigo-700" : "bg-emerald-100 text-emerald-700"
-                          }`}
-                        >
-                          {PROVIDER_LABELS[o.resolutionSource ?? ""] ?? o.resolutionSource}
-                        </span>
+                        {o.status === "CANCELLED" ? (
+                          <span className="rounded px-1.5 py-0.5 text-xs font-medium bg-red-100 text-red-700">Written off</span>
+                        ) : (
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                              o.resolutionSource === "external" ? "bg-indigo-100 text-indigo-700" : "bg-emerald-100 text-emerald-700"
+                            }`}
+                          >
+                            {PROVIDER_LABELS[o.resolutionSource ?? ""] ?? o.resolutionSource}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-neutral-500">{o.resolvedAt?.toLocaleString("en-IN")}</td>
                     </tr>
