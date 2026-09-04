@@ -9,7 +9,7 @@ export type PolicyContext = {
   obligationStatus: string; // freshly re-read at decision time — see engine.ts VERIFY_OBLIGATION_STATUS
   outstandingAmountPaise: number;
   contactOptedOut: boolean;
-  riskLevel: "STANDARD" | "HIGH_VALUE" | "DISPUTE_ACTIVE";
+  riskLevel: "STANDARD" | "HIGH_VALUE" | "DISPUTE_ACTIVE" | "FRAUD_SUSPECTED";
   messagesSentToday: number; // across the merchant, not just this case — avoids over-messaging at scale
   messagesSentThisCase: number;
   retryCount: number;
@@ -49,6 +49,10 @@ export function evaluatePolicy(action: ActionType, ctx: PolicyContext): PolicyVe
 
   if (ctx.riskLevel === "DISPUTE_ACTIVE") {
     return { result: "BLOCKED", reasoning: "An active dispute/chargeback is open on this obligation — automated recovery must stop; the AI must not pressure a customer mid-dispute." };
+  }
+
+  if (ctx.riskLevel === "FRAUD_SUSPECTED") {
+    return { result: "BLOCKED", reasoning: "Suspected fraud (rapid repeated failed payment attempts against this obligation) — automated recovery must stop; generating another payment link would only give an attacker more attempts. A human must review before anything further happens." };
   }
 
   if (action === "STOP_RECOVERY" || action === "WAIT" || action === "VERIFY_PAYMENT" || action === "RECORD_PROMISE_TO_PAY") {
