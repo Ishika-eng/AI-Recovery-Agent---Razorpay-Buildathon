@@ -94,16 +94,28 @@ export async function ingestProviderEvent(provider: string, rawBody: string, hea
 }
 
 async function processNormalizedEvent(event: UniversalPaymentEvent) {
+  if (event.eventType === "DISPUTE_OPENED") {
+    return handleDisputeOpened(event);
+  }
+
   // Correlation, Priority 1 (PRD §17): the merchant-owned obligation
   // reference the adapter already extracted from provider metadata. We
   // never fall back to amount+customer matching — if it can't be found,
   // this goes to manual review instead of guessing.
+  const obligationReferenceId = event.obligationReferenceId;
+  const paymentAttempt = event.paymentAttempt;
+  if (!obligationReferenceId || !paymentAttempt) {
+    // Every non-dispute adapter output is required to carry both — this is
+    // a defensive guard against a malformed adapter, not a real user path.
+    return { correlated: false as const };
+  }
+
   const obligation = await db.paymentObligation.findUnique({
     where: {
       merchantId_referenceType_referenceId: {
         merchantId: event.merchantId,
-        referenceType: event.obligationReferenceType,
-        referenceId: event.obligationReferenceId,
+        referenceType: event.obligationReferenceType ?? "ORDER",
+        referenceId: obligationReferenceId,
       },
     },
   });
@@ -113,8 +125,8 @@ async function processNormalizedEvent(event: UniversalPaymentEvent) {
       event.merchantId,
       "SYSTEM",
       "CORRELATION_FAILED",
-      `Provider event referenced obligation "${event.obligationReferenceId}" which does not exist — routed to manual review instead of guessing a match.`,
-      { provider: event.provider, obligationReferenceId: event.obligationReferenceId }
+      `Provider event referenced obligation "${obligationReferenceId}" which does not exist — routed to manual review instead of guessing a match.`,
+      { provider: event.provider, obligationReferenceId }
     );
     return { correlated: false as const };
   }
@@ -123,14 +135,14 @@ async function processNormalizedEvent(event: UniversalPaymentEvent) {
     data: {
       obligationId: obligation.id,
       provider: event.provider,
-      providerPaymentId: event.paymentAttempt.providerPaymentId,
+      providerPaymentId: paymentAttempt.providerPaymentId,
       providerEventId: event.providerEventId,
-      paymentMethod: event.paymentAttempt.paymentMethod,
-      amountPaise: event.paymentAttempt.amountPaise,
-      currency: event.paymentAttempt.currency,
-      status: event.paymentAttempt.status,
-      failureCategory: event.paymentAttempt.failureCategory,
-      failureReason: event.paymentAttempt.failureReason,
+      paymentMethod: paymentAttempt.paymentMethod,
+      amountPaise: paymentAttempt.amountPaise,
+      currency: paymentAttempt.currency,
+      status: paymentAttempt.status,
+      failureCategory: paymentAttempt.failureCategory,
+      failureReason: paymentAttempt.failureReason,
     },
   });
 
@@ -142,7 +154,7 @@ async function processNormalizedEvent(event: UniversalPaymentEvent) {
   }
 
   if (event.eventType === "PAYMENT_SUCCEEDED") {
-    await resolveObligation(obligation.id, event.provider, event.paymentAttempt.providerPaymentId ?? event.providerEventId);
+    await resolveObligation(obligation.id, event.provider, paymentAttempt.providerPaymentId ?? event.providerEventId);
     return { correlated: true as const, obligationId: obligation.id, result: "resolved" as const };
   }
 
@@ -152,6 +164,60 @@ async function processNormalizedEvent(event: UniversalPaymentEvent) {
   }
 
   return { correlated: true as const, obligationId: obligation.id, result: "noop" as const };
+}
+
+// A dispute/chargeback carries the disputed payment's provider id, not the
+// merchant's own obligation reference — so it correlates through the
+// PaymentAttempt we already recorded for that payment, not the standard
+// reference lookup above. PRD Problem 9: a disputed payment must stop all
+// automated collection and go to a human, not keep getting reminders while
+// it's contested.
+async function handleDisputeOpened(event: UniversalPaymentEvent) {
+  if (!event.disputedPaymentId) return { correlated: false as const };
+
+  const attempt = await db.paymentAttempt.findFirst({
+    where: {
+      provider: event.provider,
+      providerPaymentId: event.disputedPaymentId,
+      obligation: { merchantId: event.merchantId },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!attempt) {
+    await audit(
+      event.merchantId,
+      "SYSTEM",
+      "CORRELATION_FAILED",
+      `Dispute opened on payment "${event.disputedPaymentId}" but no matching payment attempt is on record — routed to manual review.`,
+      { provider: event.provider, disputedPaymentId: event.disputedPaymentId }
+    );
+    return { correlated: false as const };
+  }
+
+  const recoveryCase = await db.recoveryCase.findUnique({ where: { obligationId: attempt.obligationId } });
+  if (recoveryCase) {
+    await db.recoveryCase.update({
+      where: { id: recoveryCase.id },
+      data: { riskLevel: "DISPUTE_ACTIVE", status: "ESCALATED" },
+    });
+    // Same treatment as a cross-channel resolution: anything still awaiting
+    // execution or approval must not go out while the payment is contested.
+    await db.recoveryAction.updateMany({
+      where: { caseId: recoveryCase.id, executionStatus: { in: ["PROPOSED", "PENDING_APPROVAL", "APPROVED"] } },
+      data: { executionStatus: "POLICY_BLOCKED" },
+    });
+  }
+
+  await audit(
+    event.merchantId,
+    "SYSTEM",
+    "DISPUTE_OPENED",
+    `A dispute was opened on payment ${event.disputedPaymentId} — automated recovery stopped${recoveryCase ? " and the case was escalated to the merchant" : ""}; the AI must not pressure a customer mid-dispute.`,
+    { obligationId: attempt.obligationId, disputedPaymentId: event.disputedPaymentId, provider: event.provider }
+  );
+
+  return { correlated: true as const, obligationId: attempt.obligationId, result: "dispute_opened" as const };
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +316,37 @@ export async function resolveExternalPayment(obligationId: string, reference: st
   });
 
   return resolveObligation(obligationId, "external", reference);
+}
+
+// PRD Problem 11: the moment a customer says "don't contact me," every
+// automated channel stops — permanently, not just for the action in
+// flight. Two real triggers call this: the unsubscribe link on every
+// email this platform actually sends (src/lib/actions/email.ts via
+// src/app/api/optout/route.ts), and a merchant marking a case opted-out
+// by hand after a customer says so on a call. Policy Engine already
+// enforces `contactOptedOut` on every customer-facing proposal — this is
+// what finally sets that flag instead of it sitting unused.
+export async function optOutCustomer(obligationId: string, reason: string) {
+  const obligation = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
+  const recoveryCase = await db.recoveryCase.findUnique({ where: { obligationId } });
+  if (!recoveryCase) return null;
+
+  await db.recoveryCase.update({ where: { id: recoveryCase.id }, data: { contactOptedOut: true } });
+
+  await db.recoveryAction.updateMany({
+    where: { caseId: recoveryCase.id, executionStatus: { in: ["PROPOSED", "PENDING_APPROVAL", "APPROVED"] } },
+    data: { executionStatus: "POLICY_BLOCKED" },
+  });
+
+  await audit(
+    obligation.merchantId,
+    "SYSTEM",
+    "CUSTOMER_OPTED_OUT",
+    `Customer opted out of contact (${reason}) — all automated communication for this obligation stops.`,
+    { obligationId, caseId: recoveryCase.id }
+  );
+
+  return db.recoveryCase.findUniqueOrThrow({ where: { id: recoveryCase.id } });
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +634,7 @@ export async function executeAction(actionId: string, waitMinutes?: number) {
     });
 
     const delivery = await deliverAction(type, {
+      id: obligation.id,
       referenceId: obligation.referenceId,
       outstandingAmountPaise: obligation.outstandingAmountPaise,
       currency: obligation.currency,
