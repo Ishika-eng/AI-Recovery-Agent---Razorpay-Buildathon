@@ -1,4 +1,5 @@
 import type { RecoveryCaseContext, AIDecision } from "@/lib/types";
+import { generateHinglishVoiceScript } from "@/lib/voiceScript";
 
 // Calibration by customer value — this is what "decide the best next action
 // ... calibrated to who this customer is" actually means in code. Before
@@ -206,9 +207,22 @@ export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
   }
 
   if (recoveryHistory.messagesSent >= escalateAfter) {
+    // Hinglish voice recovery: for a HIGH-value relationship, the moment
+    // automated attempts stop being productive is exactly the moment a
+    // personal touch is worth more than a hand-off with no next step
+    // attached. Rather than a bare escalation, this hands the merchant a
+    // ready-to-use call script — the AI decides *when* voice is
+    // warranted and drafts *what to say*; an actual human still has to
+    // place the call, since this platform has no telephony integration.
+    if (customer.customerValue === "HIGH") {
+      return propose({
+        action: "RECOMMEND_VOICE_OUTREACH",
+        reason: `${recoveryHistory.messagesSent} automated attempt${recoveryHistory.messagesSent === 1 ? "" : "s"} made with no response for a ${customerDescriptor} — a valuable relationship is worth a personal call before automation gives up entirely. Suggested Hinglish script: "${generateHinglishVoiceScript(context)}"`,
+      });
+    }
     return propose({
       action: "ESCALATE_TO_HUMAN",
-      reason: `${recoveryHistory.messagesSent} automated attempt${recoveryHistory.messagesSent === 1 ? "" : "s"} made for a ${customerDescriptor} — that's this tier's limit (${escalateAfter}), handing off to the merchant rather than risking ${customer.customerValue === "HIGH" ? "over-automating a valuable relationship" : "further unproductive contact"}.`,
+      reason: `${recoveryHistory.messagesSent} automated attempt${recoveryHistory.messagesSent === 1 ? "" : "s"} made for a ${customerDescriptor} — that's this tier's limit (${escalateAfter}), handing off to the merchant rather than risking further unproductive contact.`,
     });
   }
 
