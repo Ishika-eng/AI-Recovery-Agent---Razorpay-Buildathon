@@ -217,15 +217,31 @@ end to end.
 ## Known limitations
 
 The PRD's "real-world problems" checklist is broader than what's wired up
-end to end. Guardrails for **dispute holds** and **customer opt-out** exist
-in `src/lib/policy.ts` and are enforced whenever their flag is set, but
-nothing currently ingests a dispute webhook or an opt-out request to set
-that flag. **Partial payments** and **refunds** have schema support
+end to end. **Partial payments** and **refunds** have schema support
 (`PARTIALLY_PAID`, `REFUNDED`, `outstandingAmountPaise`) but no code path
 exercises them yet — resolution today is all-or-nothing. There's no
 provider-outage anomaly detection, and outbound provider/merchant API calls
 aren't modeled (everything is webhook-driven), so failure handling for
 those calls doesn't apply yet.
+
+**Dispute holds** and **customer opt-out** are no longer guardrails
+without a trigger:
+
+- A **dispute/chargeback** (Razorpay `payment.dispute.created`, Stripe
+  `charge.dispute.created`) correlates through the disputed payment's
+  provider id — looked up against the `PaymentAttempt` already recorded for
+  it, since a dispute payload doesn't carry the merchant's own obligation
+  reference the way a payment event does (see `handleDisputeOpened` in
+  `src/lib/engine.ts`). It sets `riskLevel: DISPUTE_ACTIVE`, escalates the
+  case, and cancels anything still pending — the Policy Engine's existing
+  dispute guardrail now has something that actually sets it.
+- **Customer opt-out** has two real triggers: every real email this
+  platform sends carries a working, signed unsubscribe link
+  (`src/app/api/optout/route.ts`, no login required — the link itself is
+  the credential), and a merchant can mark a case opted-out by hand from
+  the dashboard for a customer who said so on a call. Either one sets
+  `contactOptedOut`, which the Policy Engine already enforced — it just had
+  nothing to check before.
 
 **Customer-value calibration** (`src/lib/ai.ts`): `RecoveryCaseContext`'s
 customer-value tier (derived from prior successful payments — see
