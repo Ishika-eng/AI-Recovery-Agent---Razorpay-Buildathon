@@ -264,12 +264,22 @@ export default async function DashboardPage() {
                             Refunded{o.refundedAmountPaise < o.originalAmountPaise ? ` (${formatPaise(o.refundedAmountPaise)})` : ""}
                           </span>
                         ) : (
-                          <span
-                            className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-                              o.resolutionSource === "external" ? "bg-indigo-100 text-indigo-700" : "bg-emerald-100 text-emerald-700"
-                            }`}
-                          >
-                            {PROVIDER_LABELS[o.resolutionSource ?? ""] ?? o.resolutionSource}
+                          <span className="inline-flex items-center gap-1.5">
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                                o.resolutionSource === "external" ? "bg-indigo-100 text-indigo-700" : "bg-emerald-100 text-emerald-700"
+                              }`}
+                            >
+                              {PROVIDER_LABELS[o.resolutionSource ?? ""] ?? o.resolutionSource}
+                            </span>
+                            {o.excessPaidAmountPaise > 0 && (
+                              <span
+                                className="rounded px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700"
+                                title="Paid more than was owed — flagged for human review, not counted as recovered revenue"
+                              >
+                                Overpaid by {formatPaise(o.excessPaidAmountPaise)}
+                              </span>
+                            )}
                           </span>
                         )}
                       </td>
