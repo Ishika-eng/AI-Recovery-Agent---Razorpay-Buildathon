@@ -187,6 +187,12 @@ export const RecoveryCaseContext = z.object({
     retryCount: z.number(),
     waitedAlready: z.boolean(),
     lastActionAt: z.string().nullable(),
+    // Promise-to-pay tracker: a RECORD_PROMISE_TO_PAY action whose 24h
+    // window has passed with the obligation still unpaid. A customer who
+    // already broke one promise on this case is a trust signal a human
+    // should weigh, not something more automated attempts are likely to
+    // fix.
+    brokenPromiseCount: z.number(),
   }),
   // PRD Problem 11: whether the same provider is producing the same
   // transient failure across many other obligations right now — see
