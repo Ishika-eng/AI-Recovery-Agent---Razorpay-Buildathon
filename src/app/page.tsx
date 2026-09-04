@@ -1,4 +1,5 @@
 import Link from "next/link";
+import GhostFibers from "@/components/GhostFibers";
 
 const PRINCIPLES = [
   {
@@ -40,24 +41,39 @@ export default function LandingPage() {
       </header>
 
       <main>
-        <section className="mx-auto max-w-4xl px-6 py-20 text-center">
-          <h1 className="text-4xl font-semibold tracking-tight text-neutral-900 sm:text-5xl">
-            Universal payment recovery.
-            <br />
-            Every provider. Every platform. One engine.
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-lg text-neutral-600">
-            A provider-agnostic, AI-powered recovery and reconciliation layer that sits above however your business
-            takes payments. It tracks what a customer actually owes — not any single provider&apos;s transaction — and
-            recovers it safely, wherever they end up paying.
-          </p>
-          <div className="mt-8 flex items-center justify-center gap-3">
-            <Link href="/signup" className="rounded bg-neutral-900 px-6 py-3 text-sm font-medium text-white hover:bg-neutral-700">
-              Get started free
-            </Link>
-            <Link href="/login" className="rounded border border-neutral-300 px-6 py-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50">
-              Sign in
-            </Link>
+        <section className="relative overflow-hidden bg-neutral-950">
+          <div className="absolute inset-0">
+            <GhostFibers
+              lineColor="#1b1650"
+              glowColor="#4f46e5"
+              speed={0.18}
+              scale={2.2}
+              layers={4}
+              glowIntensity={1.4}
+              brightness={1.9}
+              vignette={0.85}
+              grain={0.04}
+            />
+          </div>
+          <div className="relative mx-auto max-w-4xl px-6 py-24 text-center sm:py-28">
+            <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+              Universal payment recovery.
+              <br />
+              Every provider. Every platform. One engine.
+            </h1>
+            <p className="mx-auto mt-6 max-w-2xl text-lg text-neutral-300">
+              A provider-agnostic, AI-powered recovery and reconciliation layer that sits above however your business
+              takes payments. It tracks what a customer actually owes — not any single provider&apos;s transaction — and
+              recovers it safely, wherever they end up paying.
+            </p>
+            <div className="mt-8 flex items-center justify-center gap-3">
+              <Link href="/signup" className="rounded bg-white px-6 py-3 text-sm font-medium text-neutral-900 hover:bg-neutral-200">
+                Get started free
+              </Link>
+              <Link href="/login" className="rounded border border-white/30 px-6 py-3 text-sm font-medium text-white hover:bg-white/10">
+                Sign in
+              </Link>
+            </div>
           </div>
         </section>
 
