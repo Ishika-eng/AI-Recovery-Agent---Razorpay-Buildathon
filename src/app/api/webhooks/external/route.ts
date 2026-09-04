@@ -7,6 +7,10 @@ const ExternalPaymentPush = z.object({
   obligationReferenceType: z.string().default("ORDER"),
   obligationReferenceId: z.string(),
   reference: z.string(),
+  // Optional — PRD Problem 24: an external push can report less than what's
+  // owed (a partial bank transfer). Omit it to mean "paid in full," same
+  // as before this field existed.
+  amountPaise: z.number().int().positive().optional(),
 });
 
 // Method A from PRD §16 — "Merchant Event Push (Preferred)": the merchant
@@ -37,6 +41,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unknown obligation" }, { status: 404 });
   }
 
-  const resolved = await resolveExternalPayment(obligation.id, body.reference);
+  const resolved = await resolveExternalPayment(obligation.id, body.reference, body.amountPaise);
   return NextResponse.json({ status: "resolved", obligationId: resolved.id });
 }
