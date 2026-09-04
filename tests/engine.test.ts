@@ -851,6 +851,48 @@ describe("provider-outage detection — a systemic transient failure isn't this 
     const declineAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: declineCase.id } });
     expect(declineAction.actionType).toBe("GENERATE_PAYMENT_LINK");
   });
+
+  it("does not suspect an outage at exactly one below the threshold (2 distinct obligations)", async () => {
+    const merchant = await createMerchant();
+    const obligations = await Promise.all(
+      ["ORDER_OUTAGE_BOUNDARY_1", "ORDER_OUTAGE_BOUNDARY_2"].map((referenceId) =>
+        createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId, amountPaise: 100000 })
+      )
+    );
+
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_boundary_1", obligationId: obligations[0].referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_boundary_2", obligationId: obligations[1].referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    const caseTwo = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligations[1].id } });
+    const actionTwo = await db.recoveryAction.findFirstOrThrow({ where: { caseId: caseTwo.id }, orderBy: { createdAt: "desc" } });
+    expect(actionTwo.reason).not.toMatch(/outage/i);
+  });
+
+  it("does not let one merchant's failures trigger an outage flag on a different merchant's case", async () => {
+    const merchantA = await createMerchant();
+    const merchantB = await createMerchant();
+
+    // Three distinct obligations on merchant A, same provider, same
+    // transient category — enough to cross the threshold on its own.
+    const obligationsA = await Promise.all(
+      ["ORDER_OUTAGE_TENANT_A1", "ORDER_OUTAGE_TENANT_A2", "ORDER_OUTAGE_TENANT_A3"].map((referenceId) =>
+        createObligation({ merchantId: merchantA.id, referenceType: "ORDER", referenceId, amountPaise: 100000 })
+      )
+    );
+    for (let i = 0; i < 3; i++) {
+      await pushRazorpayFailure(merchantA.id, { paymentId: `pay_tenant_a_${i}`, obligationId: obligationsA[i].referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+    }
+
+    // Merchant B has only one obligation with a single transient failure
+    // on the very same provider — nowhere near its own threshold, and
+    // must not inherit merchant A's outage.
+    const obligationB = await createObligation({ merchantId: merchantB.id, referenceType: "ORDER", referenceId: "ORDER_OUTAGE_TENANT_B1", amountPaise: 100000 });
+    await pushRazorpayFailure(merchantB.id, { paymentId: "pay_tenant_b_1", obligationId: obligationB.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    const caseB = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligationB.id } });
+    const actionB = await db.recoveryAction.findFirstOrThrow({ where: { caseId: caseB.id } });
+    expect(actionB.reason).not.toMatch(/outage/i);
+  });
 });
 
 describe("AI-vs-rules baseline recording (PRD Problem 37)", () => {
@@ -960,5 +1002,44 @@ describe("suspected-fraud detection — rapid repeated failed attempts, not a st
     await runRecoveryCycle(obligation.id);
     const latestAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
     expect(latestAction.policyResult).toBe("BLOCKED");
+  });
+
+  it("does not flag fraud at exactly one below the threshold (4 attempts)", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_FRAUD_BOUNDARY", amountPaise: 100000 });
+
+    for (let i = 0; i < 4; i++) {
+      await pushRazorpayFailure(merchant.id, {
+        paymentId: `pay_boundary4_${i}`,
+        obligationId: obligation.referenceId,
+        amountPaise: 100000,
+        errorCode: "CARD_DECLINED",
+        errorDescription: "Card was declined",
+      });
+    }
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.riskLevel).toBe("STANDARD");
+  });
+
+  it("does not count another obligation's failed attempts toward this obligation's velocity, even for the same merchant and provider", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const merchant = await createMerchant();
+    const targetObligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_FRAUD_ISOLATION_TARGET", amountPaise: 100000 });
+    const otherObligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_FRAUD_ISOLATION_OTHER", amountPaise: 100000 });
+
+    // 4 failures on a different obligation for the same merchant/provider
+    // — this is exactly the pattern provider-outage detection cares
+    // about, but it must never feed into fraud velocity, which is
+    // strictly per-obligation.
+    for (let i = 0; i < 4; i++) {
+      await pushRazorpayFailure(merchant.id, { paymentId: `pay_isolation_other_${i}`, obligationId: otherObligation.referenceId, amountPaise: 100000, errorCode: "CARD_DECLINED", errorDescription: "Card was declined" });
+    }
+    // Just one failure on the actual target obligation.
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_isolation_target_1", obligationId: targetObligation.referenceId, amountPaise: 100000, errorCode: "CARD_DECLINED", errorDescription: "Card was declined" });
+
+    const targetCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: targetObligation.id } });
+    expect(targetCase.riskLevel).toBe("STANDARD");
   });
 });
