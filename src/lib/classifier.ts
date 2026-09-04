@@ -36,6 +36,20 @@ export function classifyFailure(input: {
     };
   }
 
+  // Checked before the generic decline/gateway patterns below: an expired
+  // card is a *terminal* instrument failure, not merely "unlikely to
+  // succeed" — no amount of retrying, waiting, or even a freshly generated
+  // payment link will ever clear it, because a link still defaults back to
+  // the same saved method. It needs its own category so the AI layer can
+  // propose a genuinely different payment method instead of just retrying
+  // (PRD Problem 28 — payment-method lifecycle).
+  if (code.includes("EXPIRED") || desc.includes("expired")) {
+    return {
+      failureCategory: "EXPIRED_CARD",
+      note: `Card on file has expired (code: ${code || "n/a"}) — this instrument can never clear again; a different payment method is required, not a retry.`,
+    };
+  }
+
   if (
     code.includes("INSUFFICIENT") ||
     desc.includes("insufficient funds") ||
