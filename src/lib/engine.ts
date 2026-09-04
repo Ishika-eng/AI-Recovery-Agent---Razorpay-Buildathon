@@ -36,6 +36,11 @@ export async function createObligation(input: {
   customerContact?: string;
   amountPaise: number;
   currency?: string;
+  // B2B receivables (referenceType "INVOICE") set this; an ORDER never
+  // sets it — src/lib/silentObligations.ts uses its presence/absence to
+  // tell "overdue invoice" apart from "abandoned checkout" when neither
+  // ever produced a real payment attempt.
+  dueDate?: Date;
 }) {
   return db.paymentObligation.create({
     data: {
@@ -47,6 +52,7 @@ export async function createObligation(input: {
       originalAmountPaise: input.amountPaise,
       outstandingAmountPaise: input.amountPaise,
       currency: input.currency ?? "INR",
+      dueDate: input.dueDate,
       status: "UNPAID",
     },
   });
