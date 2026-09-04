@@ -22,6 +22,7 @@ function context(overrides: {
   waitedAlready?: boolean;
   failureCategory?: RecoveryCaseContext["paymentHistory"][number]["failureCategory"];
   referenceType?: string;
+  providerHealth?: RecoveryCaseContext["providerHealth"];
 }): RecoveryCaseContext {
   return {
     obligation: {
@@ -43,6 +44,7 @@ function context(overrides: {
       waitedAlready: overrides.waitedAlready ?? false,
       lastActionAt: null,
     },
+    providerHealth: overrides.providerHealth ?? { suspectedOutage: false, affectedObligations: 0, windowMinutes: 15 },
     allowedActions: ALL_ACTIONS,
   };
 }
@@ -133,5 +135,50 @@ describe("decideRecoveryAction — payment-method lifecycle (PRD Problem 28)", (
       context({ customerValue: "LOW", failureCategory: "EXPIRED_CARD", referenceType: "ORDER", messagesSent: 1 })
     );
     expect(decision.action).not.toBe("ESCALATE_TO_HUMAN");
+  });
+});
+
+describe("decideRecoveryAction — provider-outage detection (PRD Problem 11)", () => {
+  const outageHealth: RecoveryCaseContext["providerHealth"] = {
+    suspectedOutage: true,
+    affectedObligations: 5,
+    windowMinutes: 15,
+  };
+
+  it("waits longer than usual instead of contacting the customer when an outage is suspected", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "STANDARD", failureCategory: "TIMEOUT", providerHealth: outageHealth })
+    );
+    expect(decision.action).toBe("WAIT");
+    expect(decision.waitMinutes).toBe(20); // double the STANDARD tier's usual 10 minutes
+    expect(decision.reason).toMatch(/outage/i);
+  });
+
+  it("escalates to a human instead of waiting indefinitely or contacting the customer once already waited through a suspected outage", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "STANDARD", failureCategory: "TIMEOUT", providerHealth: outageHealth, waitedAlready: true })
+    );
+    expect(decision.action).toBe("ESCALATE_TO_HUMAN");
+    expect(decision.reason).toMatch(/outage/i);
+  });
+
+  it("does not treat an isolated transient failure as an outage — normal wait behavior applies", () => {
+    const decision = decideRecoveryAction(context({ customerValue: "STANDARD", failureCategory: "TIMEOUT" }));
+    expect(decision.action).toBe("WAIT");
+    expect(decision.waitMinutes).toBe(10); // the normal STANDARD-tier window, not doubled
+  });
+
+  it("still treats a hard decline as a genuine instrument problem even during a suspected outage", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "STANDARD", failureCategory: "ISSUER_DECLINE", providerHealth: outageHealth })
+    );
+    expect(decision.action).toBe("GENERATE_PAYMENT_LINK");
+  });
+
+  it("still treats an expired card as a genuine instrument problem even during a suspected outage", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "STANDARD", failureCategory: "EXPIRED_CARD", providerHealth: outageHealth })
+    );
+    expect(decision.action).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
   });
 });
