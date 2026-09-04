@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processDueCases } from "@/lib/engine";
+import { detectSilentObligations } from "@/lib/silentObligations";
 
 // The autonomy hook. Next.js route handlers only run in response to a
 // request — nothing in this codebase runs on a timer by itself. This route
@@ -20,8 +21,12 @@ export async function POST(req: NextRequest) {
   if (!authorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const result = await processDueCases();
-  return NextResponse.json(result);
+  // Two independent triggers on every tick: WAITING cases whose scheduled
+  // time has arrived, and obligations that never produced a provider
+  // event at all — an abandoned checkout or an overdue B2B invoice with
+  // zero payment attempts on record (see src/lib/silentObligations.ts).
+  const [result, silent] = await Promise.all([processDueCases(), detectSilentObligations()]);
+  return NextResponse.json({ ...result, silentObligations: silent });
 }
 
 // Some free/simple cron pingers only issue GET requests — support both
