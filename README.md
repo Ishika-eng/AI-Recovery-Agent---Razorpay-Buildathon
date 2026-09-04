@@ -220,6 +220,50 @@ show up in the dashboard's "Recently closed" section alongside actual
 payments, with a distinct "Written off" badge, and correctly drag down
 (rather than inflate) the recovery-rate stat.
 
+## Attribution — proving the AI actually caused a recovery
+
+"₹ recovered" is an easy number to overclaim: an obligation resolving after
+a recovery case exists doesn't mean the recovery *caused* it — the customer
+might have paid regardless. Before this, every `RecoveryAction` had a
+`recoveredPaise` field that only ever got set in the simulated demo path;
+a real, webhook-driven resolution never credited anything.
+
+Now, when `createPaymentLink()` (`src/lib/actions/paymentLink.ts`) makes a
+real Razorpay Payment Link, its durable id is stored on the
+`RecoveryAction.deliveryRef` that generated it. When Razorpay's
+`payment_link.paid` webhook later arrives carrying that same id,
+`resolveObligation()` credits that *specific* action — not "the obligation
+got paid, somehow." Any other resolution (a customer retrying normally, a
+cross-channel payment, `resolveExternalPayment`) still resolves the
+obligation exactly as before, but is honestly logged as unattributed.
+
+The dashboard shows both numbers side by side: **₹ recovered** (every
+obligation currently `PAID`) and **Attributed to AI action** (the strictly
+smaller subset actually traced back to something this platform did) — the
+gap between them is itself an honest, useful number.
+
+**Known gap**: `SEND_REMINDER` has no durable, trackable reference the way
+a payment link does, so a recovery that followed a reminder (rather than a
+generated link) can't be rigorously attributed yet — it resolves correctly,
+just without credit.
+
+## Refunds and chargebacks reverse the metrics, not just the money
+
+A payment already counted as recovered can still come back — a refund or a
+chargeback. Razorpay's `payment.refunded` / Stripe's `charge.refunded` now
+correlate to the obligation the same way disputes do (through the refunded
+payment's provider id against the `PaymentAttempt` already on record, since
+a refund payload doesn't carry the merchant's own reference either). A full
+refund flips the obligation to `REFUNDED` — which removes it from "₹
+recovered" and "Attributed to AI action" automatically, since both are
+computed from obligations currently `PAID` — and a partial refund reduces
+the recovered total without changing status. Deliberately does **not**
+auto-restart recovery: a refund is usually a deliberate business decision
+(a return, a cancellation), not something to re-chase. `RecoveryAction`
+history is never rewritten — the historical fact "this action caused a
+₹5,000 payment" stays true even after a later refund; the dashboard nets it
+out going forward instead.
+
 ## Testing
 
 ```bash
@@ -236,12 +280,15 @@ end to end.
 ## Known limitations
 
 The PRD's "real-world problems" checklist is broader than what's wired up
-end to end. **Partial payments** and **refunds** have schema support
-(`PARTIALLY_PAID`, `REFUNDED`, `outstandingAmountPaise`) but no code path
-exercises them yet — resolution today is all-or-nothing. There's no
-provider-outage anomaly detection, and outbound provider/merchant API calls
-aren't modeled (everything is webhook-driven), so failure handling for
-those calls doesn't apply yet.
+end to end. **Refunds** are now handled (see "Refunds and chargebacks"
+below), but **partial payments** and **overpayment** are not — schema
+support exists (`PARTIALLY_PAID`, `outstandingAmountPaise`) but no code
+path exercises it yet; resolution is still all-or-nothing on the payment
+side (refunds are the exception — they support partial amounts). There's
+no provider-outage anomaly detection, no fraud/suspicious-pattern
+detection, and outbound provider/merchant API calls aren't modeled
+(everything is webhook-driven), so failure handling for those calls
+doesn't apply yet.
 
 **Dispute holds** and **customer opt-out** are no longer guardrails
 without a trigger:
