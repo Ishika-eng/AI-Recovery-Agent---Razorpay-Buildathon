@@ -179,7 +179,7 @@ async function processNormalizedEvent(event: UniversalPaymentEvent) {
       obligation.id,
       event.provider,
       paymentAttempt.providerPaymentId ?? event.providerEventId,
-      attributedActionId
+      { amountPaise: paymentAttempt.amountPaise, attributedActionId }
     );
     return { correlated: true as const, obligationId: obligation.id, result: "resolved" as const };
   }
@@ -319,7 +319,7 @@ export async function resolveObligation(
   obligationId: string,
   source: string,
   paymentReference: string,
-  attributedActionId?: string
+  options?: { amountPaise?: number; attributedActionId?: string }
 ) {
   const obligation = await db.paymentObligation.findUniqueOrThrow({
     where: { id: obligationId },
@@ -330,11 +330,50 @@ export async function resolveObligation(
     return obligation; // already resolved — nothing to do (idempotent)
   }
 
+  const attributedActionId = options?.attributedActionId;
+  // Default to "paid it all off" for callers that don't track a specific
+  // amount (e.g. the demo "customer paid elsewhere" button) — the exact
+  // amount only matters for telling partial/over/full apart below.
+  const paidAmount = options?.amountPaise ?? obligation.outstandingAmountPaise;
+
+  // PRD Problem 24/25: a payment doesn't have to match what's owed exactly.
+  // Less than outstanding → obligation stays open for the remainder, case
+  // keeps working it. More than outstanding → still fully resolved, but the
+  // excess is flagged rather than silently counted as extra recovered
+  // revenue (could be a duplicate payment, a tip, a pricing error...).
+  if (paidAmount < obligation.outstandingAmountPaise) {
+    const newOutstanding = obligation.outstandingAmountPaise - paidAmount;
+    const updated = await db.paymentObligation.update({
+      where: { id: obligationId },
+      data: { status: "PARTIALLY_PAID", outstandingAmountPaise: newOutstanding },
+    });
+
+    if (attributedActionId) {
+      await db.recoveryAction.update({
+        where: { id: attributedActionId },
+        data: { recoveredPaise: paidAmount },
+      });
+    }
+
+    await audit(
+      obligation.merchantId,
+      "SYSTEM",
+      "PARTIAL_PAYMENT_RECEIVED",
+      `₹${(paidAmount / 100).toFixed(2)} received via ${source} (${paymentReference}) toward obligation ${obligation.referenceId} — ₹${(newOutstanding / 100).toFixed(2)} still outstanding. Recovery continues for the remainder.`,
+      { obligationId, source, paymentReference, paidAmount, newOutstanding, attributedActionId: attributedActionId ?? null }
+    );
+
+    return updated;
+  }
+
+  const excessPaidAmountPaise = Math.max(0, paidAmount - obligation.outstandingAmountPaise);
+
   const updated = await db.paymentObligation.update({
     where: { id: obligationId },
     data: {
       status: "PAID",
       outstandingAmountPaise: 0,
+      excessPaidAmountPaise: obligation.excessPaidAmountPaise + excessPaidAmountPaise,
       resolvedAt: new Date(),
       resolutionSource: source,
     },
@@ -343,11 +382,12 @@ export async function resolveObligation(
   // Attribution (PRD Problem 7): only ever credit an action when the
   // caller traced this resolution back to something that action actually
   // produced (see the paymentLinkId match in processNormalizedEvent) —
-  // never inferred from "a case existed at the time."
+  // never inferred from "a case existed at the time." Credit only what was
+  // actually owed, not any overpaid excess.
   if (attributedActionId) {
     await db.recoveryAction.update({
       where: { id: attributedActionId },
-      data: { recoveredPaise: obligation.originalAmountPaise },
+      data: { recoveredPaise: obligation.outstandingAmountPaise },
     });
   }
 
@@ -356,10 +396,20 @@ export async function resolveObligation(
     "SYSTEM",
     "OBLIGATION_RESOLVED",
     attributedActionId
-      ? `Obligation ${obligation.referenceId} resolved via ${source} (${paymentReference}) — ₹${(obligation.originalAmountPaise / 100).toFixed(2)}, confirmed attributable to a recovery action this platform took.`
-      : `Obligation ${obligation.referenceId} resolved via ${source} (${paymentReference}) — ₹${(obligation.originalAmountPaise / 100).toFixed(2)}. Not attributed to a specific recovery action — the customer may have paid regardless of it.`,
+      ? `Obligation ${obligation.referenceId} resolved via ${source} (${paymentReference}) — ₹${(obligation.outstandingAmountPaise / 100).toFixed(2)}, confirmed attributable to a recovery action this platform took.`
+      : `Obligation ${obligation.referenceId} resolved via ${source} (${paymentReference}) — ₹${(obligation.outstandingAmountPaise / 100).toFixed(2)}. Not attributed to a specific recovery action — the customer may have paid regardless of it.`,
     { obligationId, source, paymentReference, attributedActionId: attributedActionId ?? null }
   );
+
+  if (excessPaidAmountPaise > 0) {
+    await audit(
+      obligation.merchantId,
+      "SYSTEM",
+      "OVERPAYMENT_DETECTED",
+      `Payment via ${source} (${paymentReference}) exceeded what was owed on obligation ${obligation.referenceId} by ₹${(excessPaidAmountPaise / 100).toFixed(2)} — flagged for human review, not counted as recovered revenue.`,
+      { obligationId, source, paymentReference, excessPaidAmountPaise }
+    );
+  }
 
   const recoveryCase = obligation.recoveryCase;
   if (recoveryCase && recoveryCase.status !== "RESOLVED" && recoveryCase.status !== "CANCELLED") {
@@ -406,21 +456,22 @@ export async function resolveObligation(
 // that happened entirely outside a channel this platform has a webhook for
 // (bank transfer, cash, a provider with no adapter yet). Also what the demo
 // "customer paid elsewhere" button calls.
-export async function resolveExternalPayment(obligationId: string, reference: string) {
+export async function resolveExternalPayment(obligationId: string, reference: string, amountPaise?: number) {
   const obligation = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
+  const paidAmount = amountPaise ?? obligation.outstandingAmountPaise;
 
   await db.paymentAttempt.create({
     data: {
       obligationId,
       provider: "external",
       providerPaymentId: reference,
-      amountPaise: obligation.outstandingAmountPaise,
+      amountPaise: paidAmount,
       currency: obligation.currency,
       status: "SUCCEEDED",
     },
   });
 
-  return resolveObligation(obligationId, "external", reference);
+  return resolveObligation(obligationId, "external", reference, { amountPaise: paidAmount });
 }
 
 // PRD Problem 11: the moment a customer says "don't contact me," every
@@ -782,10 +833,14 @@ export async function executeAction(actionId: string, waitMinutes?: number) {
       },
     });
 
+    // Use `fresh`, not `obligation`, for the amount specifically — a
+    // partial payment (PRD Problem 24) landing between proposal and
+    // execution would otherwise generate a payment link for the stale,
+    // larger amount instead of what's actually still outstanding.
     const delivery = await deliverAction(type, {
       id: obligation.id,
       referenceId: obligation.referenceId,
-      outstandingAmountPaise: obligation.outstandingAmountPaise,
+      outstandingAmountPaise: fresh.outstandingAmountPaise,
       currency: obligation.currency,
       customerContact: obligation.customerContact,
     });
@@ -800,8 +855,8 @@ export async function executeAction(actionId: string, waitMinutes?: number) {
     if (delivery.simulated) {
       const recoveryRate = RECOVERY_RATES[type] ?? 0;
       if (Math.random() < recoveryRate) {
-        await db.recoveryAction.update({ where: { id: actionId }, data: { recoveredPaise: obligation.outstandingAmountPaise } });
-        await resolveObligation(obligation.id, "razorpay", `sim_${actionId}`);
+        await db.recoveryAction.update({ where: { id: actionId }, data: { recoveredPaise: fresh.outstandingAmountPaise } });
+        await resolveObligation(obligation.id, "razorpay", `sim_${actionId}`, { amountPaise: fresh.outstandingAmountPaise });
         return executed;
       }
     }
