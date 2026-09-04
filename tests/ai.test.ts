@@ -182,3 +182,25 @@ describe("decideRecoveryAction — provider-outage detection (PRD Problem 11)", 
     expect(decision.action).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
   });
 });
+
+describe("decideRecoveryAction — checkout drop-off recovery (cart abandonment)", () => {
+  it("sends a direct payment link immediately on a dropped-off checkout, skipping the wait window", () => {
+    const decision = decideRecoveryAction(context({ customerValue: "STANDARD", failureCategory: "USER_DROPOFF" }));
+    expect(decision.action).toBe("GENERATE_PAYMENT_LINK");
+    expect(decision.reason).toMatch(/abandoned/i);
+  });
+
+  it("ignores customer value for the first touch — abandonment intent decays regardless of tier", () => {
+    const highValue = decideRecoveryAction(context({ customerValue: "HIGH", failureCategory: "USER_DROPOFF" }));
+    const lowValue = decideRecoveryAction(context({ customerValue: "LOW", failureCategory: "USER_DROPOFF" }));
+    expect(highValue.action).toBe("GENERATE_PAYMENT_LINK");
+    expect(lowValue.action).toBe("GENERATE_PAYMENT_LINK");
+  });
+
+  it("does not re-trigger the drop-off link once a first touch has already gone out", () => {
+    const decision = decideRecoveryAction(
+      context({ customerValue: "STANDARD", failureCategory: "USER_DROPOFF", messagesSent: 1 })
+    );
+    expect(decision.action).not.toBe("GENERATE_PAYMENT_LINK");
+  });
+});
