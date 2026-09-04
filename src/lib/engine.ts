@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { getProviderAdapter } from "@/lib/providers/registry";
 import { merchantAdapter } from "@/lib/merchants/genericEcommerce";
 import { decideRecoveryAction } from "@/lib/ai";
+import { decideNaiveBaseline } from "@/lib/baseline";
 import { evaluatePolicy, type PolicyContext } from "@/lib/policy";
 import { deliverAction } from "@/lib/actions";
 import { detectProviderOutage } from "@/lib/outage";
@@ -629,11 +630,16 @@ export async function runRecoveryCycle(obligationId: string) {
   context.recoveryHistory.lastActionAt = lastCustomerFacingAction?.executedAt?.toISOString() ?? null;
 
   const decision = decideRecoveryAction(context);
+  // Never executed — recorded purely so the dashboard can show how often,
+  // and where, the calibrated AI actually decided differently than a
+  // naive fixed-schedule rule would have (PRD Problem 37).
+  const baseline = decideNaiveBaseline(context);
 
   await audit(obligation.merchantId, "AI", "PROPOSE_ACTION", decision.reason, {
     obligationId,
     caseId: recoveryCase.id,
     action: decision.action,
+    baselineAction: baseline.action,
   });
 
   const policyCtx: PolicyContext = {
@@ -671,6 +677,7 @@ export async function runRecoveryCycle(obligationId: string) {
       actionType: decision.action,
       proposedBy: "AI",
       reason: decision.reason,
+      baselineAction: baseline.action,
       policyResult: verdict.result,
       policyReasoning: verdict.reasoning,
       executionStatus:
