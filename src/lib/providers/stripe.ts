@@ -3,14 +3,16 @@ import type { PaymentProviderAdapter } from "@/lib/providers/types";
 import type { UniversalPaymentEvent } from "@/lib/types";
 import { classifyFailure } from "@/lib/classifier";
 
-// A representative slice of Stripe's payment_intent webhook shape.
+// A representative slice of Stripe's payment_intent and dispute webhook
+// shapes.
 // https://stripe.com/docs/api/payment_intents/object
+// https://stripe.com/docs/api/disputes/object
 type StripeEvent = {
   type: string;
   id: string;
   data: {
     object: {
-      id: string; // pi_xxx
+      id: string; // pi_xxx for a PaymentIntent, dp_xxx for a Dispute
       amount: number; // Stripe amounts are already the minor unit (cents/paise)
       currency: string;
       metadata?: Record<string, string>;
@@ -20,6 +22,8 @@ type StripeEvent = {
         code?: string;
         message?: string;
       };
+      // Dispute objects only — the PaymentIntent id being disputed.
+      payment_intent?: string;
     };
   };
 };
@@ -52,6 +56,21 @@ export class StripeAdapter implements PaymentProviderAdapter {
     const event = parsed as StripeEvent;
     const intent = event.data?.object;
     if (!intent) return null;
+
+    // Same PRD Problem 9 handling as Razorpay's payment.dispute.created —
+    // a Dispute object carries the disputed PaymentIntent's id, not the
+    // merchant's own obligation reference, so this correlates through
+    // disputedPaymentId (a PaymentAttempt lookup) instead of metadata.
+    if (event.type === "charge.dispute.created") {
+      if (!intent.payment_intent) return null;
+      return {
+        eventType: "DISPUTE_OPENED",
+        provider: "stripe",
+        providerEventId: event.id,
+        merchantId,
+        disputedPaymentId: intent.payment_intent,
+      };
+    }
 
     // Same Priority-1 correlation as Razorpay, just carried in Stripe's own
     // vocabulary: PaymentIntent metadata instead of notes/receipt.
