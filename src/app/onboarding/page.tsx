@@ -23,7 +23,10 @@ const TERMS = [
 
 export default async function OnboardingPage() {
   const merchant = await getCurrentMerchant();
-  if (!merchant) redirect("/login");
+  // See the matching comment in dashboard/page.tsx — an orphaned session
+  // cookie must be cleared via a route handler, not redirected to /login
+  // directly, or the proxy bounces it straight back here forever.
+  if (!merchant) redirect("/api/auth/clear-session");
   if (merchant.termsAcceptedAt) redirect("/dashboard");
 
   return (
