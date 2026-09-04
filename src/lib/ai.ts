@@ -53,6 +53,18 @@ export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
   const escalateAfter = ESCALATE_AFTER_MESSAGES[customer.customerValue];
   const customerDescriptor = `${customer.customerValue.toLowerCase()}-value, ${customer.relationshipAgeDays}-day customer (${customer.successfulPayments} prior successful payment${customer.successfulPayments === 1 ? "" : "s"})`;
 
+  // Promise-to-pay tracker: a customer who already broke one recorded
+  // promise on this case is a trust signal a human should weigh, not
+  // something another automated reminder is likely to fix — escalate
+  // immediately rather than keep cycling through this tier's usual
+  // message budget.
+  if (recoveryHistory.brokenPromiseCount >= 1) {
+    return propose({
+      action: "ESCALATE_TO_HUMAN",
+      reason: `A previously recorded promise-to-pay on this case went unkept for a ${customerDescriptor} — a broken promise is a trust signal worth a human's judgment, not something another automated reminder is likely to resolve.`,
+    });
+  }
+
   const lastFailure = paymentHistory[paymentHistory.length - 1];
   const transientFailure =
     lastFailure?.failureCategory === "TIMEOUT" ||
