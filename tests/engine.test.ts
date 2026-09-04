@@ -15,7 +15,7 @@ import {
 import { detectSilentObligations } from "@/lib/silentObligations";
 import { createMerchant, resetDb } from "./helpers";
 
-function razorpayFailedBody(opts: { paymentId: string; obligationId: string; amountPaise: number; errorCode?: string; errorDescription?: string }) {
+function razorpayFailedBody(opts: { paymentId: string; obligationId: string; amountPaise: number; errorCode?: string; errorDescription?: string; method?: string }) {
   return JSON.stringify({
     event: "payment.failed",
     payload: {
@@ -26,7 +26,7 @@ function razorpayFailedBody(opts: { paymentId: string; obligationId: string; amo
           receipt: opts.obligationId,
           amount: opts.amountPaise,
           currency: "INR",
-          method: "upi",
+          method: opts.method ?? "upi",
           error_code: opts.errorCode,
           error_description: opts.errorDescription,
         },
@@ -1273,5 +1273,32 @@ describe("silent obligations — checkout drop-off and overdue B2B receivables n
     const result = await detectSilentObligations(merchantA.id);
     expect(result.triggered).toBe(1);
     expect(await db.paymentAttempt.count({ where: { obligationId: obligationB.id } })).toBe(0);
+  });
+});
+
+describe("mandate retry sequencer — a failed UPI Autopay debit follows NPCI's retry limits, not a card's", () => {
+  it("asks for mandate re-authorization instead of another retry once the cap is exhausted, end to end", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_MANDATE_1", amountPaise: 100000 });
+
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_mandate_1", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT", method: "emandate" });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_mandate_2", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT", method: "emandate" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const lastAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(lastAction.actionType).toBe("OFFER_ALTERNATIVE_PAYMENT_METHOD");
+    expect(lastAction.reason).toMatch(/mandate/i);
+  });
+
+  it("does not exhaust the mandate cap from an ordinary card's retries", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_MANDATE_CARD", amountPaise: 100000 });
+
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_card_1", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT", method: "card" });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_card_2", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT", method: "card" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    const lastAction = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "desc" } });
+    expect(lastAction.reason).not.toMatch(/mandate/i);
   });
 });
