@@ -18,11 +18,13 @@ function isWithinLastMs(date: Date, windowMs: number) {
 
 const FAILURE_LABELS: Record<string, string> = {
   ISSUER_DECLINE: "Issuer decline",
+  EXPIRED_CARD: "Expired card",
   TIMEOUT: "Timeout",
   INSUFFICIENT_FUNDS: "Insufficient funds",
   GATEWAY_ERROR: "Gateway error",
   NETWORK_ERROR: "Network error",
   USER_DROPOFF: "Checkout drop-off",
+  RECEIVABLE_OVERDUE: "Overdue invoice",
   UNKNOWN: "Unclassified",
 };
 
