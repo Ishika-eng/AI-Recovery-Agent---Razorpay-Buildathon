@@ -109,6 +109,10 @@ authentication:
 
 ```bash
 npm install
+cp .env.example .env
+# then set SESSION_SECRET in .env — see the comment in .env.example for
+# a one-liner to generate one. DATABASE_URL already points at a local
+# SQLite file; everything else in .env.example is optional.
 npx prisma migrate dev
 npm run dev
 ```
