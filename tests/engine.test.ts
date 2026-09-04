@@ -685,3 +685,100 @@ describe("refunds and chargebacks — the metrics must reverse, not just the mon
     expect(log.reasoning).toMatch(/manual review/i);
   });
 });
+
+describe("partial payment and overpayment — a payment doesn't have to match what's owed exactly", () => {
+  it("a partial payment reduces outstanding and keeps the case open, not resolved", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_PARTIAL_1", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    const result = await pushRazorpayPaymentLinkPaid(merchant.id, {
+      linkId: "plink_partial_1",
+      obligationId: obligation.referenceId,
+      amountPaise: 40000,
+    });
+    expect(result.status).toBe("processed");
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("PARTIALLY_PAID");
+    expect(updated.outstandingAmountPaise).toBe(60000);
+
+    const unchangedCase = await db.recoveryCase.findUniqueOrThrow({ where: { id: recoveryCase.id } });
+    expect(unchangedCase.status).toBe("WAITING"); // never auto-closed by a partial payment
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "PARTIAL_PAYMENT_RECEIVED" } });
+    expect(log.reasoning).toMatch(/still outstanding/i);
+  });
+
+  it("a follow-up payment for the remainder fully resolves the obligation", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_PARTIAL_2", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    await pushRazorpayPaymentLinkPaid(merchant.id, { linkId: "plink_partial_2a", obligationId: obligation.referenceId, amountPaise: 40000 });
+    const result = await pushRazorpayPaymentLinkPaid(merchant.id, { linkId: "plink_partial_2b", obligationId: obligation.referenceId, amountPaise: 60000 });
+    expect(result.status).toBe("processed");
+    if (result.status !== "processed") throw new Error("unreachable");
+    expect(result.result).toBe("resolved");
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("PAID");
+    expect(updated.outstandingAmountPaise).toBe(0);
+  });
+
+  it("an overpayment fully resolves the obligation and flags the excess instead of counting it as recovered", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_OVERPAY_1", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    const result = await pushRazorpayPaymentLinkPaid(merchant.id, {
+      linkId: "plink_overpay_1",
+      obligationId: obligation.referenceId,
+      amountPaise: 120000,
+    });
+    expect(result.status).toBe("processed");
+    if (result.status !== "processed") throw new Error("unreachable");
+    expect(result.result).toBe("resolved");
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("PAID");
+    expect(updated.outstandingAmountPaise).toBe(0);
+    expect(updated.excessPaidAmountPaise).toBe(20000);
+
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: "OVERPAYMENT_DETECTED" } });
+    expect(log.reasoning).toMatch(/flagged for human review/i);
+  });
+
+  it("an attributed overpayment credits the action only for what was actually owed, not the excess", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_OVERPAY_2", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+    const action = await db.recoveryAction.create({
+      data: {
+        caseId: recoveryCase.id,
+        actionType: "GENERATE_PAYMENT_LINK",
+        reason: "test fixture",
+        executionStatus: "EXECUTED",
+        deliveryChannel: "razorpay_payment_link",
+        deliveryRef: "plink_overpay_2",
+      },
+    });
+
+    await pushRazorpayPaymentLinkPaid(merchant.id, { linkId: "plink_overpay_2", obligationId: obligation.referenceId, amountPaise: 150000 });
+
+    const updatedAction = await db.recoveryAction.findUniqueOrThrow({ where: { id: action.id } });
+    expect(updatedAction.recoveredPaise).toBe(100000); // not 150000
+  });
+
+  it("resolveExternalPayment supports an explicit partial amount", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_EXT_PARTIAL", amountPaise: 100000 });
+    await db.recoveryCase.create({ data: { obligationId: obligation.id, status: "WAITING" } });
+
+    await resolveExternalPayment(obligation.id, "ext_partial_1", 25000);
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("PARTIALLY_PAID");
+    expect(updated.outstandingAmountPaise).toBe(75000);
+  });
+});
