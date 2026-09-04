@@ -617,6 +617,46 @@ export async function writeOffObligation(obligationId: string, reason: string) {
   return updated;
 }
 
+// Promise-to-pay tracker: RECORD_PROMISE_TO_PAY was already a real
+// ActionType with real execution behavior (executeAction below parks the
+// case for 24h and schedules a re-verification) — but nothing ever
+// actually invoked it. The AI never proposes it (a promise made on a call
+// is something only a human can hear), and there was no merchant-facing
+// route or button either, so the action was entirely unreachable. This is
+// that trigger: a merchant records what a customer told them, the same
+// pattern as optOutCustomer/writeOffObligation above.
+export async function recordPromiseToPay(obligationId: string, reason: string) {
+  const obligation = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligationId } });
+  if (obligation.status === "PAID") {
+    return { skipped: true as const, reason: "obligation already PAID" };
+  }
+
+  const recoveryCase = await ensureRecoveryCase(obligationId);
+  if (recoveryCase.status === "RESOLVED" || recoveryCase.status === "CANCELLED") {
+    return { skipped: true as const, reason: `case is already ${recoveryCase.status}` };
+  }
+
+  const action = await db.recoveryAction.create({
+    data: {
+      caseId: recoveryCase.id,
+      actionType: "RECORD_PROMISE_TO_PAY",
+      proposedBy: "MERCHANT",
+      reason,
+      policyResult: "ALLOWED",
+      policyReasoning: "Non-customer-facing action with no guardrail implications.",
+      executionStatus: "PROPOSED",
+    },
+  });
+
+  await audit(obligation.merchantId, "MERCHANT", "PROPOSE_ACTION", reason, {
+    obligationId,
+    caseId: recoveryCase.id,
+    action: "RECORD_PROMISE_TO_PAY",
+  });
+
+  return executeAction(action.id);
+}
+
 // ---------------------------------------------------------------------------
 // Recovery cycle — one pass of: verify → gather context → AI proposes →
 // Policy gates → execute (or park for approval). This is what runs after
@@ -703,6 +743,7 @@ export async function runRecoveryCycle(obligationId: string) {
       retryCount: failedAttempts.length,
       waitedAlready: false, // set below
       lastActionAt: null, // set below
+      brokenPromiseCount: 0, // set below
     },
     providerHealth,
     allowedActions: merchantAdapter.getAvailableRecoveryActions(),
@@ -719,6 +760,14 @@ export async function runRecoveryCycle(obligationId: string) {
     )
   );
   context.recoveryHistory.lastActionAt = lastCustomerFacingAction?.executedAt?.toISOString() ?? null;
+  // A promise is "broken" once its 24h window (see recordPromiseToPay's
+  // execution behavior above) has passed with the obligation still
+  // unresolved — we already know it's unresolved just by being in this
+  // function (the PAID check at the top would have short-circuited).
+  const promiseDeadline = Date.now() - 24 * 3_600_000;
+  context.recoveryHistory.brokenPromiseCount = executedActions.filter(
+    (a) => a.actionType === "RECORD_PROMISE_TO_PAY" && a.executedAt !== null && a.executedAt.getTime() < promiseDeadline
+  ).length;
 
   const decision = decideRecoveryAction(context);
   // Never executed — recorded purely so the dashboard can show how often,
