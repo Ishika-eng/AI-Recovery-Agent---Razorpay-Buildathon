@@ -227,6 +227,16 @@ a:active, button:active { transform: scale(.98) !important; }
    it — the layout shape of an actual product dashboard rather than a
    single long report page. */
 .dashboard-topbar { position: relative; z-index: 2; }
+.dashboard-header-inner { position: relative; z-index: 1; }
+/* Ambient cursor-reactive grid behind the whole dashboard — fixed to the
+   viewport (not the scrollable page) since the cursor is always within the
+   viewport anyway, sitting below every real UI layer (topbar z-index 2,
+   main z-index 1) so it never blocks clicks, but above the flat shell
+   background and the GhostFibers atmosphere glow (z-index -1). Neither the
+   sidebar nor the content cards paint an opaque background of their own in
+   the gaps between them, so it shows through everywhere except directly
+   under a card. */
+.dashboard-cursor-grid { position: fixed; inset: 0; z-index: 0; }
 .dashboard-main { position: relative; z-index: 1; }
 .dashboard-app-shell { display: flex; align-items: flex-start; gap: 0; min-height: calc(100vh - 73px); }
 .dashboard-sidebar { position: sticky; top: 0; flex: 0 0 220px; width: 220px; height: calc(100vh - 73px); padding: 20px 12px; border-right: 1px solid rgba(132,145,196,.14); overflow-y: auto; }
@@ -237,8 +247,12 @@ a:active, button:active { transform: scale(.98) !important; }
 /* LineSidebar's marker rail bleeds outside its own box to the left and its
    proximity effect needs room above/below each item to register — give it
    a little breathing space beyond the plain padding used elsewhere. */
-.dashboard-sidebar .line-sidebar { padding-left: 4px; }
+.dashboard-sidebar .line-sidebar { position: relative; z-index: 1; padding-left: 4px; }
 .dashboard-sidebar .line-sidebar__index { font-weight: 600; }
+
+@media (max-width: 860px) {
+  .dashboard-cursor-grid { display: none; }
+}
 
 @media (max-width: 860px) {
   .dashboard-app-shell { flex-direction: column; }

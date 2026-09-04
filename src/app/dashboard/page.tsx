@@ -10,6 +10,7 @@ import { DashboardSidebarNav } from "@/components/DashboardSidebarNav";
 import { FailureBreakdownChart, ObligationStatusChart, RecoveryBreakdownChart } from "@/components/DashboardCharts";
 import AnimatedList from "@/components/AnimatedList";
 import BorderGlow from "@/components/BorderGlow";
+import CursorGrid from "@/components/CursorGrid";
 
 export const dynamic = "force-dynamic";
 
@@ -226,6 +227,9 @@ export default async function DashboardPage() {
     <div className="dashboard-shell min-h-screen bg-neutral-50 pb-24 text-neutral-900">
       <div className="dashboard-atmosphere" aria-hidden="true">
         <GhostFibers lineColor="#241b61" glowColor="#4d42b7" speed={0.08} scale={2.6} layers={3} glowIntensity={0.38} brightness={0.7} blueBoost={1.1} vignette={1} grain={0.025} />
+      </div>
+      <div className="dashboard-cursor-grid" aria-hidden="true">
+        <CursorGrid cellSize={34} color="#8f83ff" radius={140} falloff="smooth" holdTime={300} fadeDuration={700} lineWidth={1} maxOpacity={0.85} fillOpacity={0.1} gridOpacity={0.05} cellRadius={0} clickPulse pulseSpeed={550} />
       </div>
       <header className="dashboard-topbar border-b border-neutral-200 bg-white">
         <div className="dashboard-header-inner flex items-center justify-between px-6 py-4">
