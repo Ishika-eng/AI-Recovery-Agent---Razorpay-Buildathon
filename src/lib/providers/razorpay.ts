@@ -36,6 +36,14 @@ type RazorpayEvent = {
         customer?: { contact?: string; email?: string };
       };
     };
+    dispute?: {
+      entity: {
+        id: string;
+        payment_id: string;
+        amount: number;
+        currency?: string;
+      };
+    };
   };
 };
 
@@ -93,6 +101,23 @@ export class RazorpayAdapter implements PaymentProviderAdapter {
           status: "SUCCEEDED",
         },
         customerContact: linkEntity.customer?.contact ?? linkEntity.customer?.email,
+      };
+    }
+
+    // PRD Problem 9: a disputed payment must stop automated collection and
+    // go to a human, not keep getting reminders while it's contested. A
+    // dispute payload carries the disputed payment's id, not the merchant's
+    // own obligation reference — engine.ts correlates it via that id
+    // against the PaymentAttempt already recorded for it.
+    if (event.event === "payment.dispute.created") {
+      const disputeEntity = event.payload.dispute?.entity;
+      if (!disputeEntity) return null;
+      return {
+        eventType: "DISPUTE_OPENED",
+        provider: "razorpay",
+        providerEventId: `rzp_${disputeEntity.id}_dispute`,
+        merchantId,
+        disputedPaymentId: disputeEntity.payment_id,
       };
     }
 
