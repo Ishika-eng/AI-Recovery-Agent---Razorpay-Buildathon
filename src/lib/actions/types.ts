@@ -8,6 +8,15 @@
 export type DeliveryResult = {
   channel: "razorpay_payment_link" | "email" | "simulated" | "not_configured";
   simulated: boolean;
-  ref?: string; // payment link URL, email message id, etc.
+  // The durable identifier for this delivery — a Razorpay payment link id,
+  // an email message id, etc. This is what makes attribution possible: when
+  // a payment_link.paid webhook later arrives carrying this same id,
+  // engine.ts can credit the specific RecoveryAction that generated it,
+  // instead of just noting "the obligation got paid somehow."
+  ref?: string;
+  // The actual URL/address handed to the customer, when there is one —
+  // separate from `ref` because a payment link's durable id and its
+  // customer-facing short URL are two different strings.
+  customerUrl?: string;
   note: string; // human-readable, goes straight into the audit trail
 };
