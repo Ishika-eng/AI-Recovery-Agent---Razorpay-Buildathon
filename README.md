@@ -356,6 +356,27 @@ The dashboard surfaces this as an amber banner ("Possible provider outage
 detected...") whenever a recent AI decision cited a suspected outage,
 rather than leaving it buried in the audit trail.
 
+## AI vs. rules — proving the calibration layer earns its complexity
+
+A merchant adopting this platform is almost always replacing a fixed-
+schedule dunning rule ("payment failed → reminder → wait a day → link →
+give up"), not nothing. Claiming the AI/policy layer is worth it needs to
+be demonstrable, not just asserted — so `decideNaiveBaseline()`
+(`src/lib/baseline.ts`) is exactly that fixed schedule, with none of the
+customer-value calibration, payment-method-lifecycle awareness, or
+provider-outage detection described above. It is **never executed** —
+every real AI decision also records what this baseline would have done
+instead (`RecoveryAction.baselineAction`), purely for comparison.
+
+The dashboard's "AI vs. a fixed-schedule rule" section shows the
+divergence rate (what fraction of decisions the AI made differently than
+the naive rule would have) and a breakdown of exactly what changed — e.g.
+"Rule would SEND_REMINDER — AI instead WAIT" when a failure looks
+transient, or "Rule would GENERATE_PAYMENT_LINK — AI instead
+OFFER_ALTERNATIVE_PAYMENT_METHOD" on an expired card. A 0% divergence rate
+would be an honest signal the calibration isn't earning its keep; this
+makes that claim checkable instead of asserted.
+
 ## Testing
 
 ```bash
@@ -373,13 +394,14 @@ end to end.
 
 The PRD's "real-world problems" checklist is broader than what's wired up
 end to end. **Refunds**, **partial payments/overpayment**, **payment-
-method lifecycle** (expired cards), and **provider-outage detection** are
-now handled (see "Refunds and chargebacks", "Partial payment and
-overpayment", "Payment-method lifecycle", and "Provider-outage detection"
-above — the payment-method lifecycle section has one known gap around
-subscription correlation, noted there). There's no fraud/suspicious-
-pattern detection, and outbound provider/merchant API calls aren't
-modeled (everything is webhook-driven), so failure handling for those
+method lifecycle** (expired cards), **provider-outage detection**, and
+**AI-vs-rules defensibility metrics** are now handled (see "Refunds and
+chargebacks", "Partial payment and overpayment", "Payment-method
+lifecycle", "Provider-outage detection", and "AI vs. rules" above — the
+payment-method lifecycle section has one known gap around subscription
+correlation, noted there). There's no fraud/suspicious-pattern detection,
+and outbound provider/merchant API calls aren't modeled (everything is
+webhook-driven), so failure handling for those
 calls doesn't apply yet.
 
 **Dispute holds** and **customer opt-out** are no longer guardrails
