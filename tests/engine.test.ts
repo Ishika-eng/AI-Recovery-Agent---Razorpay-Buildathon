@@ -5,6 +5,7 @@ import {
   approveAction,
   createObligation,
   ingestProviderEvent,
+  processDueCases,
   rejectAction,
   resolveExternalPayment,
   runRecoveryCycle,
@@ -277,5 +278,74 @@ describe("approve / reject flow", () => {
     const approved = await approveAction(pending.id);
 
     expect(approved.executionStatus).toBe("SKIPPED_ALREADY_PAID");
+  });
+});
+
+describe("autonomous scheduling (processDueCases)", () => {
+  it("advances a WAIT case on its own once nextActionAt has passed, with no manual trigger", async () => {
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0)); // inside default 0-24 contact window
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_SCHED_WAIT", amountPaise: 100000 });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_1", obligationId: obligation.referenceId, amountPaise: 100000, errorCode: "GATEWAY_TIMEOUT" });
+
+    let recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.nextAction).toBe("VERIFY_PAYMENT"); // WAIT already executed, scheduled a re-check
+
+    // Not due yet — a tick right now must not touch it.
+    const tooEarly = await processDueCases(new Date(2026, 0, 1, 12, 0, 30));
+    expect(tooEarly.dueCount).toBe(0);
+    recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.nextAction).toBe("VERIFY_PAYMENT");
+
+    // Past the WAIT window (10 minutes for this obligation's STANDARD-tier
+    // customer — see WAIT_MINUTES_BY_VALUE in src/lib/ai.ts) — the
+    // scheduler, not a human, moves it forward.
+    const due = await processDueCases(new Date(2026, 0, 1, 12, 11, 0));
+    expect(due.dueCount).toBe(1);
+
+    const generateLinkAction = await db.recoveryAction.findFirstOrThrow({
+      where: { caseId: recoveryCase.id, actionType: "GENERATE_PAYMENT_LINK" },
+    });
+    expect(generateLinkAction.executionStatus).toBe("EXECUTED");
+  });
+
+  it("never re-proposes on top of an action already sitting in the approval queue", async () => {
+    const merchant = await createMerchant({ autoApproveUnderPaise: 0 });
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_SCHED_PENDING", amountPaise: 100000 });
+    const recoveryCase = await db.recoveryCase.create({
+      data: { obligationId: obligation.id, status: "WAITING", nextAction: "SEND_REMINDER", nextActionAt: new Date(Date.now() - 1000) },
+    });
+    await db.recoveryAction.create({
+      data: { caseId: recoveryCase.id, actionType: "SEND_REMINDER", reason: "test fixture", executionStatus: "PENDING_APPROVAL" },
+    });
+
+    const before = await db.recoveryAction.count({ where: { caseId: recoveryCase.id } });
+    const result = await processDueCases();
+    const after = await db.recoveryAction.count({ where: { caseId: recoveryCase.id } });
+
+    expect(result.results[0]).toMatchObject({ caseId: recoveryCase.id, skipped: "pending_approval" });
+    expect(after).toBe(before); // no duplicate proposal created
+  });
+
+  it("gives a time-blocked case a real nextActionAt so the scheduler can pick it back up", async () => {
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 0, 0)); // outside a 9-20 contact window
+    const merchant = await createMerchant({ contactWindowStartHour: 9, contactWindowEndHour: 20 });
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_SCHED_BLOCKED", amountPaise: 100000 });
+    await pushRazorpayFailure(merchant.id, { paymentId: "pay_1", obligationId: obligation.referenceId, amountPaise: 100000, errorDescription: "Card was declined by the issuing bank" });
+
+    const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
+    expect(recoveryCase.nextActionAt).not.toBeNull(); // not left to poll forever with no clock
+
+    // Move into the contact window and past that check time — the same
+    // scheduler tick that would run in production now clears the hold.
+    vi.setSystemTime(new Date(2026, 0, 2, 10, 0, 0));
+    const result = await processDueCases();
+    expect(result.dueCount).toBe(1);
+
+    const action = await db.recoveryAction.findFirstOrThrow({
+      where: { caseId: recoveryCase.id, actionType: "GENERATE_PAYMENT_LINK" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(action.executionStatus).toBe("EXECUTED");
   });
 });
