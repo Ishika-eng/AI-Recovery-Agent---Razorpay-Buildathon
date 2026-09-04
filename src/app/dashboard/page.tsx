@@ -48,31 +48,46 @@ export default async function DashboardPage() {
   if (!merchant) redirect("/login");
   if (!merchant.termsAcceptedAt) redirect("/onboarding");
 
-  const [obligations, pendingActions, recentAudit, recoveryActionsPrevented, allAttempts, openCases, resolvedObligations] = await Promise.all([
-    db.paymentObligation.findMany({ where: { merchantId: merchant.id }, orderBy: { createdAt: "desc" } }),
-    db.recoveryAction.findMany({
-      where: { executionStatus: "PENDING_APPROVAL", case: { obligation: { merchantId: merchant.id } } },
-      include: { case: { include: { obligation: true } } },
-      orderBy: { createdAt: "desc" },
-    }),
-    db.auditLog.findMany({ where: { merchantId: merchant.id }, orderBy: { createdAt: "desc" }, take: 25 }),
-    db.auditLog.count({ where: { merchantId: merchant.id, action: "RECOVERY_ACTION_PREVENTED" } }),
-    db.paymentAttempt.findMany({ where: { obligation: { merchantId: merchant.id } } }),
-    db.recoveryCase.findMany({
-      where: { obligation: { merchantId: merchant.id }, status: { in: ["OPEN", "WAITING", "ESCALATED"] } },
-      include: { obligation: { include: { attempts: true } } },
-      orderBy: { createdAt: "desc" },
-    }),
-    db.paymentObligation.findMany({
-      where: { merchantId: merchant.id, status: { in: ["PAID", "CANCELLED"] } },
-      orderBy: { resolvedAt: "desc" },
-      take: 10,
-    }),
-  ]);
+  const [obligations, pendingActions, recentAudit, recoveryActionsPrevented, allAttempts, openCases, resolvedObligations, attributedSum] =
+    await Promise.all([
+      db.paymentObligation.findMany({ where: { merchantId: merchant.id }, orderBy: { createdAt: "desc" } }),
+      db.recoveryAction.findMany({
+        where: { executionStatus: "PENDING_APPROVAL", case: { obligation: { merchantId: merchant.id } } },
+        include: { case: { include: { obligation: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+      db.auditLog.findMany({ where: { merchantId: merchant.id }, orderBy: { createdAt: "desc" }, take: 25 }),
+      db.auditLog.count({ where: { merchantId: merchant.id, action: "RECOVERY_ACTION_PREVENTED" } }),
+      db.paymentAttempt.findMany({ where: { obligation: { merchantId: merchant.id } } }),
+      db.recoveryCase.findMany({
+        where: { obligation: { merchantId: merchant.id }, status: { in: ["OPEN", "WAITING", "ESCALATED"] } },
+        include: { obligation: { include: { attempts: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+      db.paymentObligation.findMany({
+        where: { merchantId: merchant.id, status: { in: ["PAID", "CANCELLED", "REFUNDED"] } },
+        orderBy: { resolvedAt: "desc" },
+        take: 10,
+      }),
+      // Attribution (PRD Problem 7): the sum of recoveredPaise across
+      // actions is only ever set when a resolution was actually traced back
+      // to that specific action (a matched payment link, or the simulated
+      // demo path) — never inferred from "a case existed at the time." This
+      // is deliberately a smaller, more honest number than "₹ recovered."
+      db.recoveryAction.aggregate({
+        _sum: { recoveredPaise: true },
+        where: { recoveredPaise: { not: null }, case: { obligation: { merchantId: merchant.id, status: "PAID" } } },
+      }),
+    ]);
 
   const totalObligations = obligations.length;
   const paidObligations = obligations.filter((o) => o.status === "PAID");
-  const recoveredPaise = paidObligations.reduce((sum, o) => sum + o.originalAmountPaise, 0);
+  // Net of refunds (PRD Problem 26) — a fully refunded obligation already
+  // carries status REFUNDED and falls out of paidObligations entirely; a
+  // partial refund stays PAID but its refunded amount is subtracted here so
+  // this number never overstates revenue that was actually given back.
+  const recoveredPaise = paidObligations.reduce((sum, o) => sum + (o.originalAmountPaise - o.refundedAmountPaise), 0);
+  const attributedPaise = attributedSum._sum.recoveredPaise ?? 0;
   const atRiskPaise = obligations
     .filter((o) => o.status === "UNPAID" || o.status === "PARTIALLY_PAID" || o.status === "PENDING")
     .reduce((sum, o) => sum + o.outstandingAmountPaise, 0);
@@ -112,8 +127,14 @@ export default async function DashboardPage() {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8 space-y-10">
-        <section className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-          <StatTile label="₹ recovered" value={formatPaise(recoveredPaise)} accent="text-emerald-600" />
+        <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+          <StatTile label="₹ recovered" value={formatPaise(recoveredPaise)} accent="text-emerald-600" hint="Net of refunds — obligations currently PAID, minus any amount refunded back" />
+          <StatTile
+            label="Attributed to AI action"
+            value={formatPaise(attributedPaise)}
+            accent="text-emerald-700"
+            hint="Only counted when traced to a specific action this platform took (a matched payment link) — not inferred from a case merely existing at the time"
+          />
           <StatTile label="Recovery rate" value={`${recoveryRate.toFixed(1)}%`} />
           <StatTile label="₹ still at risk" value={formatPaise(atRiskPaise)} />
           <StatTile
@@ -238,6 +259,10 @@ export default async function DashboardPage() {
                       <td className="px-4 py-3">
                         {o.status === "CANCELLED" ? (
                           <span className="rounded px-1.5 py-0.5 text-xs font-medium bg-red-100 text-red-700">Written off</span>
+                        ) : o.status === "REFUNDED" ? (
+                          <span className="rounded px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700">
+                            Refunded{o.refundedAmountPaise < o.originalAmountPaise ? ` (${formatPaise(o.refundedAmountPaise)})` : ""}
+                          </span>
                         ) : (
                           <span
                             className={`rounded px-1.5 py-0.5 text-xs font-medium ${
