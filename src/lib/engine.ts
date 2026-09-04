@@ -696,6 +696,7 @@ export async function runRecoveryCycle(obligationId: string) {
       provider: a.provider as RecoveryCaseContext["paymentHistory"][number]["provider"],
       status: a.status as RecoveryCaseContext["paymentHistory"][number]["status"],
       failureCategory: (a.failureCategory ?? undefined) as FailureCategory | undefined,
+      paymentMethod: a.paymentMethod ?? undefined,
     })),
     recoveryHistory: {
       messagesSent: recoveryCase.messagesSent,
