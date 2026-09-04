@@ -38,7 +38,7 @@ const ESCALATE_AFTER_MESSAGES: Record<RecoveryCaseContext["customer"]["customerV
 // replacing the body of this function — nothing else in the pipeline
 // changes, because the contract is already the seam.
 export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
-  const { obligation, customer, paymentHistory, recoveryHistory, allowedActions } = context;
+  const { obligation, customer, paymentHistory, recoveryHistory, providerHealth, allowedActions } = context;
 
   const propose = (decision: AIDecision): AIDecision => {
     if (allowedActions.includes(decision.action)) return decision;
@@ -94,6 +94,27 @@ export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
     return propose({
       action: "GENERATE_PAYMENT_LINK",
       reason: `Failure indicates the instrument itself won't clear on retry — offering a fresh payment link for an alternate method to a ${customerDescriptor}.`,
+    });
+  }
+
+  // Provider-outage detection (PRD Problem 11): a transient failure that's
+  // part of a wider outage isn't "try again shortly," it's "wait for the
+  // provider to recover" — and it's definitely not "contact the customer,"
+  // since nothing on their end is wrong. This only ever applies to
+  // failures already classified as transient — a hard decline or expired
+  // card above is a genuine instrument problem regardless of what else is
+  // happening to the provider, so it's handled before this, unconditionally.
+  if (transientFailure && providerHealth.suspectedOutage) {
+    if (!recoveryHistory.waitedAlready) {
+      return propose({
+        action: "WAIT",
+        waitMinutes: waitMinutes * 2,
+        reason: `Suspected provider outage — ${providerHealth.affectedObligations} other obligations hit the same kind of transient failure on this provider in the last ${providerHealth.windowMinutes} minutes, so this looks like the provider's problem, not this customer's. Waiting longer than the usual window before anything customer-facing, since nothing about this instrument needs it.`,
+      });
+    }
+    return propose({
+      action: "ESCALATE_TO_HUMAN",
+      reason: `Suspected provider outage is still ongoing after the extended wait — handing off to a human rather than contacting a customer about something outside their control, or waiting indefinitely.`,
     });
   }
 
