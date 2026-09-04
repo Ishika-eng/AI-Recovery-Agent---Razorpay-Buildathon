@@ -39,11 +39,11 @@ export async function deliverAction(
     // A real link is worth emailing if we have an email-shaped contact —
     // best-effort: email delivery failing doesn't downgrade a real link
     // back to "simulated", the link itself is still real and payable.
-    if (!link.simulated && link.ref) {
+    if (!link.simulated && link.customerUrl) {
       const emailed = await sendReminderEmail({
         to: obligation.customerContact,
         subject: `Complete your payment — ${amountLabel} due`,
-        body: `We were unable to process your payment of ${amountLabel} for ${obligation.referenceId}. Complete it here: ${link.ref}${unsubscribeLine(obligation.id)}`,
+        body: `We were unable to process your payment of ${amountLabel} for ${obligation.referenceId}. Complete it here: ${link.customerUrl}${unsubscribeLine(obligation.id)}`,
       });
       if (!emailed.simulated) {
         return { ...link, note: `${link.note} ${emailed.note}` };
