@@ -3,12 +3,14 @@ import type { PaymentProviderAdapter } from "@/lib/providers/types";
 import type { UniversalPaymentEvent } from "@/lib/types";
 import { classifyFailure } from "@/lib/classifier";
 
-// Razorpay's own shape for a payment.failed / payment.captured webhook.
+// Razorpay's own shape for payment.failed / payment.captured /
+// payment_link.paid webhooks.
 // https://razorpay.com/docs/webhooks/payloads/payments/
+// https://razorpay.com/docs/webhooks/payloads/payment-links/
 type RazorpayEvent = {
   event: string;
   payload: {
-    payment: {
+    payment?: {
       entity: {
         id: string;
         order_id?: string;
@@ -21,6 +23,17 @@ type RazorpayEvent = {
         error_description?: string;
         notes?: Record<string, string>;
         receipt?: string;
+      };
+    };
+    payment_link?: {
+      entity: {
+        id: string;
+        reference_id?: string;
+        amount: number;
+        amount_paid?: number;
+        currency?: string;
+        notes?: Record<string, string>;
+        customer?: { contact?: string; email?: string };
       };
     };
   };
@@ -52,6 +65,37 @@ export class RazorpayAdapter implements PaymentProviderAdapter {
 
   normalizeEvent(parsed: unknown, merchantId: string): UniversalPaymentEvent | null {
     const event = parsed as RazorpayEvent;
+
+    // Payment Links (src/lib/actions/paymentLink.ts) complete via their own
+    // event, distinct from a plain order/payment flow — Razorpay recommends
+    // listening to this one specifically for link completion rather than
+    // relying solely on payment.captured. Same Priority-1 correlation:
+    // notes.obligation_id, falling back to the link's own reference_id.
+    if (event.event === "payment_link.paid") {
+      const linkEntity = event.payload.payment_link?.entity;
+      if (!linkEntity) return null;
+      const linkObligationRef = linkEntity.notes?.obligation_id ?? linkEntity.reference_id;
+      if (!linkObligationRef) return null;
+
+      const paymentEntity = event.payload.payment?.entity;
+      return {
+        eventType: "PAYMENT_SUCCEEDED",
+        provider: "razorpay",
+        providerEventId: `rzp_${linkEntity.id}_link_paid`,
+        merchantId,
+        obligationReferenceType: "ORDER",
+        obligationReferenceId: linkObligationRef,
+        paymentAttempt: {
+          providerPaymentId: paymentEntity?.id ?? linkEntity.id,
+          amountPaise: paymentEntity?.amount ?? linkEntity.amount_paid ?? linkEntity.amount,
+          currency: linkEntity.currency ?? "INR",
+          paymentMethod: paymentEntity?.method,
+          status: "SUCCEEDED",
+        },
+        customerContact: linkEntity.customer?.contact ?? linkEntity.customer?.email,
+      };
+    }
+
     const entity = event.payload?.payment?.entity;
     if (!entity) return null;
 
