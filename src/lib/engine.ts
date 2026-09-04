@@ -3,6 +3,7 @@ import { getProviderAdapter } from "@/lib/providers/registry";
 import { merchantAdapter } from "@/lib/merchants/genericEcommerce";
 import { decideRecoveryAction } from "@/lib/ai";
 import { evaluatePolicy, type PolicyContext } from "@/lib/policy";
+import { deliverAction } from "@/lib/actions";
 import type { UniversalPaymentEvent, ActionType, RecoveryCaseContext, FailureCategory } from "@/lib/types";
 
 async function audit(
@@ -382,9 +383,24 @@ export async function runRecoveryCycle(obligationId: string) {
     // trigger; REQUIRES_APPROVAL means "hold until a merchant decides".
     // Either way there is a pending next step, which is exactly what a
     // cross-channel resolution must be able to cancel.
+    //
+    // BLOCKED holds get a real nextActionAt so the scheduler (processDueCases)
+    // picks them back up once the guardrail that blocked them plausibly
+    // clears (contact window opens, minimum message gap elapses) — without
+    // this, a case blocked by a time-based guardrail would never advance on
+    // its own. A permanent-ish hold (opt-out, active dispute) isn't
+    // time-based, so it's left off the clock instead of polled forever.
+    // REQUIRES_APPROVAL is always off the clock — only a merchant decision
+    // moves it, not the passage of time.
+    const permanentHold = /opted out|dispute/i.test(verdict.reasoning);
     await db.recoveryCase.update({
       where: { id: recoveryCase.id },
-      data: { status: "WAITING", nextAction: decision.action, nextActionAt: null },
+      data: {
+        status: "WAITING",
+        nextAction: decision.action,
+        nextActionAt:
+          verdict.result === "BLOCKED" && !permanentHold ? new Date(Date.now() + 3_600_000) : null,
+      },
     });
   }
 
@@ -404,10 +420,14 @@ async function countMessagesSentToday(merchantId: string) {
   });
 }
 
-// Simulated execution outcomes. In production, GENERATE_PAYMENT_LINK would
-// call a provider adapter's generatePaymentLink(); here we simulate whether
-// the customer completes payment shortly after, closing the loop the same
-// way a real webhook would (through resolveObligation).
+// Fallback-only recovery rates. These are used exclusively when
+// deliverAction() reports `simulated: true` — i.e. no real channel was
+// configured (RAZORPAY_KEY_ID/SECRET, SMTP_*) or an email-shaped contact
+// wasn't on file, so nothing actually reached the customer and there's no
+// real webhook to eventually close the loop. When a real channel *was*
+// used, this is never consulted — resolution comes from resolveObligation()
+// being called by an actual payment.captured/payment_link.paid webhook,
+// same as any other channel.
 const RECOVERY_RATES: Partial<Record<ActionType, number>> = {
   SEND_REMINDER: 0.3,
   GENERATE_PAYMENT_LINK: 0.55,
@@ -502,8 +522,9 @@ export async function executeAction(actionId: string, waitMinutes?: number) {
       return executed;
     }
 
-    // Customer-facing actions: increment counters, simulate an outcome, and
-    // if "recovered", close the loop exactly as a real webhook would.
+    // Customer-facing actions: increment counters, actually try to reach
+    // the customer, and only fall back to a simulated outcome if nothing
+    // real was possible.
     await db.recoveryCase.update({
       where: { id: recoveryCase.id },
       data: {
@@ -515,20 +536,37 @@ export async function executeAction(actionId: string, waitMinutes?: number) {
       },
     });
 
-    const executed = await finishExecution(actionId, obligation.merchantId, `${type} sent to customer.`);
+    const delivery = await deliverAction(type, {
+      referenceId: obligation.referenceId,
+      outstandingAmountPaise: obligation.outstandingAmountPaise,
+      currency: obligation.currency,
+      customerContact: obligation.customerContact,
+    });
 
-    const recoveryRate = RECOVERY_RATES[type] ?? 0;
-    if (Math.random() < recoveryRate) {
-      await db.recoveryAction.update({ where: { id: actionId }, data: { recoveredPaise: obligation.outstandingAmountPaise } });
-      await resolveObligation(obligation.id, "razorpay", `sim_${actionId}`);
-    } else {
-      // Not recovered: immediately determine the next step (another
-      // reminder, a follow-up, escalation...) so the case always has a
-      // scheduled next action visible rather than sitting inert. This is
-      // what a cross-channel payment (PRD §13/§14) cancels if it lands
-      // before the customer acts on it.
-      await runRecoveryCycle(obligation.id);
+    await db.recoveryAction.update({
+      where: { id: actionId },
+      data: { deliveryChannel: delivery.channel, deliveryRef: delivery.ref ?? null },
+    });
+
+    const executed = await finishExecution(actionId, obligation.merchantId, delivery.note);
+
+    if (delivery.simulated) {
+      const recoveryRate = RECOVERY_RATES[type] ?? 0;
+      if (Math.random() < recoveryRate) {
+        await db.recoveryAction.update({ where: { id: actionId }, data: { recoveredPaise: obligation.outstandingAmountPaise } });
+        await resolveObligation(obligation.id, "razorpay", `sim_${actionId}`);
+        return executed;
+      }
     }
+
+    // Either a real channel was used (resolution now waits on a real
+    // webhook — payment.captured / payment_link.paid) or the simulated
+    // roll didn't recover it. Either way, immediately determine the next
+    // step (another reminder, a follow-up, escalation...) so the case
+    // always has a scheduled next action visible rather than sitting
+    // inert. This is what a cross-channel payment cancels if it lands
+    // before the customer acts on it.
+    await runRecoveryCycle(obligation.id);
 
     return executed;
   } catch (err) {
@@ -589,4 +627,42 @@ export async function rejectAction(actionId: string) {
 export async function advanceCase(caseId: string) {
   const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { id: caseId } });
   return runRecoveryCycle(recoveryCase.obligationId);
+}
+
+// ---------------------------------------------------------------------------
+// Autonomous scheduling — without this, the recovery cycle only ever
+// advances when a provider webhook happens to arrive or a human clicks
+// Advance on the dashboard. A WAIT or SCHEDULE_FOLLOW_UP case whose
+// nextActionAt has passed, with nobody watching, would otherwise sit
+// unpaid forever with no reminder ever sent — which is most of what this
+// agent exists to prevent. This is the function an external scheduler
+// (see src/app/api/cron/tick/route.ts) calls periodically, across every
+// merchant, to pick those cases back up on its own.
+// ---------------------------------------------------------------------------
+
+export async function processDueCases(now: Date = new Date()) {
+  const dueCases = await db.recoveryCase.findMany({
+    where: { status: "WAITING", nextActionAt: { lte: now } },
+    select: {
+      id: true,
+      obligationId: true,
+      // A case awaiting merchant sign-off must never be auto-advanced —
+      // that would silently re-propose (and could duplicate) an action a
+      // human is already supposed to be deciding on.
+      actions: { where: { executionStatus: "PENDING_APPROVAL" }, select: { id: true }, take: 1 },
+    },
+  });
+
+  const results: Array<{ caseId: string; obligationId: string; skipped?: string; outcome?: unknown }> = [];
+
+  for (const c of dueCases) {
+    if (c.actions.length > 0) {
+      results.push({ caseId: c.id, obligationId: c.obligationId, skipped: "pending_approval" });
+      continue;
+    }
+    const outcome = await runRecoveryCycle(c.obligationId);
+    results.push({ caseId: c.id, obligationId: c.obligationId, outcome });
+  }
+
+  return { processedAt: now.toISOString(), dueCount: dueCases.length, results };
 }
