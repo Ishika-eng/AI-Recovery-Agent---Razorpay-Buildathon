@@ -59,6 +59,32 @@ export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
     lastFailure?.failureCategory === "NETWORK_ERROR" ||
     lastFailure?.failureCategory === "GATEWAY_ERROR";
 
+  // Payment-method lifecycle (PRD Problem 28): an expired card is not just
+  // "unlikely to clear on retry" like a generic decline — it is a *dead*
+  // instrument. A plain GENERATE_PAYMENT_LINK would still default back to
+  // the same saved card, so this must explicitly ask for a different
+  // method instead. On a SUBSCRIPTION, this also isn't a one-off failure:
+  // the identical charge will fail again on every future renewal until the
+  // customer replaces the card, so it skips this tier's usual message
+  // budget and escalates to a human on the very first automated attempt —
+  // waiting for a customer-value-scaled number of retries just delays a
+  // failure that automation cannot actually fix.
+  const expiredCard = paymentHistory.some((a) => a.failureCategory === "EXPIRED_CARD");
+  if (expiredCard) {
+    if (obligation.referenceType === "SUBSCRIPTION" && recoveryHistory.messagesSent >= 1) {
+      return propose({
+        action: "ESCALATE_TO_HUMAN",
+        reason: `Card on file has expired on a SUBSCRIPTION for a ${customerDescriptor} — this will keep failing every renewal cycle until the payment method is replaced, so escalating immediately rather than spending more automated attempts on a charge that can't succeed.`,
+      });
+    }
+    if (recoveryHistory.messagesSent === 0) {
+      return propose({
+        action: "OFFER_ALTERNATIVE_PAYMENT_METHOD",
+        reason: `Card on file has expired for a ${customerDescriptor} — the same instrument can never clear again, so asking for a genuinely different payment method instead of a plain retry link.`,
+      });
+    }
+  }
+
   // Hard decline / insufficient funds: retrying the same instrument won't
   // help, so go straight to offering a different one — no point waiting.
   const hardDecline = paymentHistory.some(
