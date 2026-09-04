@@ -15,6 +15,7 @@ type RazorpayEvent = {
         id: string;
         order_id?: string;
         amount: number;
+        amount_refunded?: number;
         currency?: string;
         method?: string;
         contact?: string;
@@ -93,6 +94,10 @@ export class RazorpayAdapter implements PaymentProviderAdapter {
         merchantId,
         obligationReferenceType: "ORDER",
         obligationReferenceId: linkObligationRef,
+        // The link's own id — lets engine.ts credit the specific
+        // RecoveryAction that generated this link (attribution), instead
+        // of crediting "the obligation got paid, cause unknown."
+        paymentLinkId: linkEntity.id,
         paymentAttempt: {
           providerPaymentId: paymentEntity?.id ?? linkEntity.id,
           amountPaise: paymentEntity?.amount ?? linkEntity.amount_paid ?? linkEntity.amount,
@@ -101,6 +106,25 @@ export class RazorpayAdapter implements PaymentProviderAdapter {
           status: "SUCCEEDED",
         },
         customerContact: linkEntity.customer?.contact ?? linkEntity.customer?.email,
+      };
+    }
+
+    // PRD Problem 26: a payment that was already counted as recovered can
+    // still be refunded or charged back — the dashboard must not keep
+    // claiming that revenue forever. Same correlation pattern as disputes:
+    // a refund carries the refunded payment's id, not the merchant's own
+    // reference, so it's matched against the PaymentAttempt already on
+    // record for it.
+    if (event.event === "payment.refunded") {
+      const refundedEntity = event.payload.payment?.entity;
+      if (!refundedEntity) return null;
+      return {
+        eventType: "REFUND_ISSUED",
+        provider: "razorpay",
+        providerEventId: `rzp_${refundedEntity.id}_refunded_${refundedEntity.amount_refunded ?? refundedEntity.amount}`,
+        merchantId,
+        refundedPaymentId: refundedEntity.id,
+        refundAmountPaise: refundedEntity.amount_refunded ?? refundedEntity.amount,
       };
     }
 
