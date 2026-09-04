@@ -38,7 +38,7 @@ export const CASE_STATUSES = ["OPEN", "WAITING", "RESOLVED", "ESCALATED", "CANCE
 export const CaseStatus = z.enum(CASE_STATUSES);
 export type CaseStatus = z.infer<typeof CaseStatus>;
 
-export const RISK_LEVELS = ["STANDARD", "HIGH_VALUE", "DISPUTE_ACTIVE"] as const;
+export const RISK_LEVELS = ["STANDARD", "HIGH_VALUE", "DISPUTE_ACTIVE", "FRAUD_SUSPECTED"] as const;
 export const RiskLevel = z.enum(RISK_LEVELS);
 export type RiskLevel = z.infer<typeof RiskLevel>;
 
