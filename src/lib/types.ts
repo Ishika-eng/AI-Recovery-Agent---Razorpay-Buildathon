@@ -6,6 +6,7 @@ import { z } from "zod";
 
 export const FAILURE_CATEGORIES = [
   "ISSUER_DECLINE",
+  "EXPIRED_CARD",
   "TIMEOUT",
   "INSUFFICIENT_FUNDS",
   "GATEWAY_ERROR",
@@ -154,6 +155,12 @@ export type ObligationContext = z.infer<typeof ObligationContext>;
 export const RecoveryCaseContext = z.object({
   obligation: z.object({
     id: z.string(),
+    // Needed for payment-method lifecycle reasoning (PRD Problem 28): a
+    // SUBSCRIPTION obligation hitting a dead instrument (EXPIRED_CARD)
+    // isn't a one-off failure — the identical charge will fail again every
+    // renewal cycle until the customer updates their payment method, so
+    // it's escalated to a human faster than a one-time ORDER would be.
+    referenceType: z.string(),
     amountPaise: z.number(),
     outstandingAmountPaise: z.number(),
     status: ObligationStatus,
