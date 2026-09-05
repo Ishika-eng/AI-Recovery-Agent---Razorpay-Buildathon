@@ -7,13 +7,17 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-// SQLite has no native enum support in Prisma, so the enums below are plain
-// strings at the schema level. The allowed values live in src/lib/types.ts
-// and are enforced with zod at every write boundary.
+// Originally SQLite, migrated to Postgres for real deployment (Vercel's
+// serverless functions have no persistent disk, so a local SQLite file
+// doesn't survive between requests there). Enums below are still plain
+// strings, not native Postgres enums — that was a SQLite limitation, not a
+// Postgres one, but changing it now would be a second, unrelated migration;
+// the allowed values already live in src/lib/types.ts and are enforced with
+// zod at every write boundary regardless of the column type.
 
 // A merchant using the platform. Everything is scoped to a merchant — no
 // obligation, attempt, case, or audit entry crosses tenant boundaries.

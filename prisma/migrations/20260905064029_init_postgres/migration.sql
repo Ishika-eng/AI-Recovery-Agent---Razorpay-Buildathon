@@ -1,20 +1,24 @@
 -- CreateTable
 CREATE TABLE "Merchant" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "email" TEXT NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "passwordHash" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "termsAcceptedAt" TIMESTAMP(3),
     "maxAutoRetries" INTEGER NOT NULL DEFAULT 3,
     "maxMessagesPerCase" INTEGER NOT NULL DEFAULT 3,
     "minMessageGapHours" INTEGER NOT NULL DEFAULT 24,
     "autoApproveUnderPaise" INTEGER NOT NULL DEFAULT 500000,
     "contactWindowStartHour" INTEGER NOT NULL DEFAULT 9,
-    "contactWindowEndHour" INTEGER NOT NULL DEFAULT 20
+    "contactWindowEndHour" INTEGER NOT NULL DEFAULT 20,
+
+    CONSTRAINT "Merchant_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "PaymentObligation" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "merchantId" TEXT NOT NULL,
     "referenceType" TEXT NOT NULL,
     "referenceId" TEXT NOT NULL,
@@ -22,18 +26,21 @@ CREATE TABLE "PaymentObligation" (
     "customerContact" TEXT,
     "originalAmountPaise" INTEGER NOT NULL,
     "outstandingAmountPaise" INTEGER NOT NULL,
+    "refundedAmountPaise" INTEGER NOT NULL DEFAULT 0,
+    "excessPaidAmountPaise" INTEGER NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'INR',
     "status" TEXT NOT NULL DEFAULT 'UNPAID',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "dueDate" DATETIME,
-    "resolvedAt" DATETIME,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "dueDate" TIMESTAMP(3),
+    "resolvedAt" TIMESTAMP(3),
     "resolutionSource" TEXT,
-    CONSTRAINT "PaymentObligation_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "Merchant" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+
+    CONSTRAINT "PaymentObligation_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "PaymentAttempt" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "obligationId" TEXT NOT NULL,
     "provider" TEXT NOT NULL,
     "providerPaymentId" TEXT,
@@ -44,14 +51,15 @@ CREATE TABLE "PaymentAttempt" (
     "status" TEXT NOT NULL,
     "failureCategory" TEXT,
     "failureReason" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "PaymentAttempt_obligationId_fkey" FOREIGN KEY ("obligationId") REFERENCES "PaymentObligation" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PaymentAttempt_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "RecoveryCase" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "obligationId" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'OPEN',
     "strategy" TEXT,
@@ -59,54 +67,61 @@ CREATE TABLE "RecoveryCase" (
     "recoveryAttempts" INTEGER NOT NULL DEFAULT 0,
     "messagesSent" INTEGER NOT NULL DEFAULT 0,
     "nextAction" TEXT,
-    "nextActionAt" DATETIME,
+    "nextActionAt" TIMESTAMP(3),
     "contactOptedOut" BOOLEAN NOT NULL DEFAULT false,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "resolvedAt" DATETIME,
-    CONSTRAINT "RecoveryCase_obligationId_fkey" FOREIGN KEY ("obligationId") REFERENCES "PaymentObligation" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "resolvedAt" TIMESTAMP(3),
+
+    CONSTRAINT "RecoveryCase_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "RecoveryAction" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "caseId" TEXT NOT NULL,
     "actionType" TEXT NOT NULL,
     "proposedBy" TEXT NOT NULL DEFAULT 'AI',
     "reason" TEXT NOT NULL,
+    "baselineAction" TEXT,
     "policyResult" TEXT,
     "policyReasoning" TEXT,
     "executionStatus" TEXT NOT NULL DEFAULT 'PROPOSED',
     "recoveredPaise" INTEGER,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "decidedAt" DATETIME,
-    "executedAt" DATETIME,
-    CONSTRAINT "RecoveryAction_caseId_fkey" FOREIGN KEY ("caseId") REFERENCES "RecoveryCase" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "deliveryChannel" TEXT,
+    "deliveryRef" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "decidedAt" TIMESTAMP(3),
+    "executedAt" TIMESTAMP(3),
+
+    CONSTRAINT "RecoveryAction_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "ExternalEvent" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "merchantId" TEXT NOT NULL,
     "provider" TEXT NOT NULL,
     "externalEventId" TEXT NOT NULL,
     "eventType" TEXT NOT NULL,
-    "receivedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "processedAt" DATETIME,
+    "receivedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "processedAt" TIMESTAMP(3),
     "idempotencyStatus" TEXT NOT NULL DEFAULT 'PROCESSED',
     "rawPayload" TEXT NOT NULL,
-    CONSTRAINT "ExternalEvent_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "Merchant" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+
+    CONSTRAINT "ExternalEvent_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "AuditLog" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "merchantId" TEXT NOT NULL,
     "actor" TEXT NOT NULL,
     "action" TEXT NOT NULL,
     "reasoning" TEXT NOT NULL,
     "metadata" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "AuditLog_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "Merchant" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AuditLog_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -140,7 +155,25 @@ CREATE INDEX "RecoveryAction_executionStatus_idx" ON "RecoveryAction"("execution
 CREATE INDEX "ExternalEvent_merchantId_receivedAt_idx" ON "ExternalEvent"("merchantId", "receivedAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ExternalEvent_provider_externalEventId_key" ON "ExternalEvent"("provider", "externalEventId");
+CREATE UNIQUE INDEX "ExternalEvent_merchantId_provider_externalEventId_key" ON "ExternalEvent"("merchantId", "provider", "externalEventId");
 
 -- CreateIndex
 CREATE INDEX "AuditLog_merchantId_createdAt_idx" ON "AuditLog"("merchantId", "createdAt");
+
+-- AddForeignKey
+ALTER TABLE "PaymentObligation" ADD CONSTRAINT "PaymentObligation_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "Merchant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PaymentAttempt" ADD CONSTRAINT "PaymentAttempt_obligationId_fkey" FOREIGN KEY ("obligationId") REFERENCES "PaymentObligation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RecoveryCase" ADD CONSTRAINT "RecoveryCase_obligationId_fkey" FOREIGN KEY ("obligationId") REFERENCES "PaymentObligation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RecoveryAction" ADD CONSTRAINT "RecoveryAction_caseId_fkey" FOREIGN KEY ("caseId") REFERENCES "RecoveryCase"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ExternalEvent" ADD CONSTRAINT "ExternalEvent_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "Merchant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_merchantId_fkey" FOREIGN KEY ("merchantId") REFERENCES "Merchant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
