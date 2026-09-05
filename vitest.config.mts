@@ -25,12 +25,31 @@ export default defineConfig({
     hookTimeout: 60_000,
     env: {
       DATABASE_URL: process.env.TEST_DATABASE_URL,
-      // Force this off regardless of what's in .env — tests must never
-      // depend on a live external API. Without this, having a real
-      // GROQ_API_KEY configured for local dev (see src/lib/llm.ts) makes
-      // the Hinglish-voice-script tests silently call the real Groq API,
-      // turning a deterministic unit test into a slow, flaky network test.
+      // Force these off regardless of what's in .env — tests must never
+      // depend on a live external API or secret, or a test run's behavior
+      // silently depends on which developer's machine (and which real
+      // credentials happen to be configured on it) runs it.
+      // GROQ_API_KEY: without this, a real key configured for local dev
+      // (see src/lib/llm.ts) makes the Hinglish-voice-script tests silently
+      // call the real Groq API, turning a deterministic unit test into a
+      // slow, flaky network test.
+      // RAZORPAY_WEBHOOK_SECRET/STRIPE_WEBHOOK_SECRET: found live while
+      // setting up the real webhook — with a real secret configured,
+      // providers/razorpay.ts's verifyWebhook() actually validates HMAC
+      // signatures, which every webhook test's fake unsigned payload then
+      // correctly fails, rejecting webhooks the tests expect to process.
+      // RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET: found the same way — with real
+      // keys configured, every GENERATE_PAYMENT_LINK/
+      // OFFER_ALTERNATIVE_PAYMENT_METHOD test was silently creating real
+      // Razorpay payment links (see paymentLink.ts) instead of exercising
+      // the documented "not configured" fallback the tests actually mean
+      // to cover, and re-running the suite risks the exact
+      // reference_id-already-exists collision this same session hit live.
       GROQ_API_KEY: "",
+      RAZORPAY_WEBHOOK_SECRET: "",
+      STRIPE_WEBHOOK_SECRET: "",
+      RAZORPAY_KEY_ID: "",
+      RAZORPAY_KEY_SECRET: "",
     },
   },
   resolve: {

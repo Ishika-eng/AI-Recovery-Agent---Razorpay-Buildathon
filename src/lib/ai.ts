@@ -226,10 +226,23 @@ export function decideRecoveryAction(context: RecoveryCaseContext): AIDecision {
     });
   }
 
+  // Bug fix: this used to propose SCHEDULE_FOLLOW_UP here, which parks the
+  // case with nextAction "SEND_REMINDER" (see engine.ts) but never actually
+  // sends anything or advances messagesSent — so the next cycle re-derives
+  // this exact same decision from unchanged context and proposes
+  // SCHEDULE_FOLLOW_UP again, forever. A case that had sent exactly one
+  // message could never reach either a second reminder or escalation; found
+  // live testing the real Razorpay webhook flow, where several seeded cases
+  // were permanently stuck here. The Policy Engine already owns "is it
+  // actually time for another touch yet" via minMessageGapHours (see
+  // policy.ts) and already re-polls on its own schedule when it says no
+  // (engine.ts's BLOCKED handling) — so the fix is to let the AI just
+  // propose the real next touch and stop trying to gate timing a second
+  // time in the decision layer.
   if (recoveryHistory.messagesSent >= 1) {
     return propose({
-      action: "SCHEDULE_FOLLOW_UP",
-      reason: `Previous attempt sent with no response yet, and this ${customerDescriptor} has room for another automated touch before escalating (limit: ${escalateAfter}) — scheduling a follow-up rather than messaging again immediately.`,
+      action: "SEND_REMINDER",
+      reason: `Previous attempt sent with no response yet, and this ${customerDescriptor} has room for another automated touch before escalating (limit: ${escalateAfter}) — sending a follow-up reminder.`,
     });
   }
 

@@ -82,15 +82,21 @@ describe("decideRecoveryAction — calibrated to customer value", () => {
     // This tier's limit is 1 automated attempt — HIGH value additionally
     // gets a recommended personal call with a ready script, not just a
     // bare hand-off (see the dedicated Hinglish voice recovery tests).
+    // STANDARD/LOW tolerate another automated touch before escalating —
+    // that's a real SEND_REMINDER proposal, not a SCHEDULE_FOLLOW_UP dead
+    // end (see the bug-fix comment in ai.ts: SCHEDULE_FOLLOW_UP never
+    // advanced messagesSent, so a case could get permanently stuck here).
+    // Whether it actually goes out yet is the Policy Engine's job via
+    // minMessageGapHours, not the decision layer's.
     expect(highValue.action).toBe("RECOMMEND_VOICE_OUTREACH");
-    expect(standard.action).toBe("SCHEDULE_FOLLOW_UP"); // standard tolerates a second attempt first
-    expect(lowValue.action).toBe("SCHEDULE_FOLLOW_UP"); // low tolerates a third attempt first
+    expect(standard.action).toBe("SEND_REMINDER"); // standard tolerates a second attempt first
+    expect(lowValue.action).toBe("SEND_REMINDER"); // low tolerates a third attempt first
 
     // And at messagesSent = 2, standard has now hit its limit but low hasn't yet.
     const standardAtTwo = decideRecoveryAction(context({ customerValue: "STANDARD", messagesSent: 2 }));
     const lowAtTwo = decideRecoveryAction(context({ customerValue: "LOW", messagesSent: 2 }));
     expect(standardAtTwo.action).toBe("ESCALATE_TO_HUMAN");
-    expect(lowAtTwo.action).toBe("SCHEDULE_FOLLOW_UP");
+    expect(lowAtTwo.action).toBe("SEND_REMINDER");
   });
 
   it("still ignores customer value when the failure is a hard decline — no point waiting regardless of who it is", () => {

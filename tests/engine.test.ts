@@ -81,10 +81,13 @@ async function pushRazorpayPaymentLinkPaid(merchantId: string, opts: Parameters<
   return ingestProviderEvent("razorpay", razorpayPaymentLinkPaidBody(opts), new Headers(), merchantId);
 }
 
+// "payment.refunded" isn't a real Razorpay event (see providers/razorpay.ts) —
+// the real one is refund.processed, carried under payload.refund.entity.
 function razorpayRefundedBody(opts: { paymentId: string; amountPaise: number; amountRefundedPaise: number }) {
   return JSON.stringify({
-    event: "payment.refunded",
+    event: "refund.processed",
     payload: {
+      refund: { entity: { id: `rfnd_${opts.paymentId}`, payment_id: opts.paymentId, amount: opts.amountRefundedPaise, currency: "INR" } },
       payment: { entity: { id: opts.paymentId, amount: opts.amountPaise, amount_refunded: opts.amountRefundedPaise, currency: "INR" } },
     },
   });

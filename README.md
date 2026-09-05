@@ -127,6 +127,55 @@ See `src/lib/engine.ts` for the full recovery-cycle orchestration, or
 [`docs/architecture.html`](docs/architecture.html) for a diagrammed walkthrough
 of the request flow, the data model, and the auth/tenancy gate.
 
+### System diagram — request, deployment, and data flow together
+
+```mermaid
+flowchart TB
+    subgraph external["External"]
+        RZP[Razorpay webhooks]
+        STR[Stripe webhooks]
+        EXT[Merchant / other provider push]
+        CRON[GitHub Actions — every 5 min<br/>tick.yml]
+    end
+
+    subgraph vercel["Vercel — Next.js app"]
+        ROUTES["/api/webhooks/* routes"]
+        ENGINE["Recovery engine<br/>src/lib/engine.ts"]
+        AI["AI decision layer<br/>src/lib/ai.ts<br/>(deterministic)"]
+        POLICY["Policy engine<br/>src/lib/policy.ts<br/>(deterministic, final word)"]
+        LLMTEXT["Message text<br/>src/lib/voiceScript.ts, actions/*<br/>(real LLM, tone only)"]
+        DASH["Dashboard — Server Components<br/>scoped to session merchantId"]
+        TICK["/api/cron/tick"]
+    end
+
+    subgraph data["Data & external services"]
+        PG[(Neon Postgres)]
+        GROQ[Groq API — LLM]
+        RZPAPI[Razorpay API — real payment links]
+    end
+
+    RZP --> ROUTES
+    STR --> ROUTES
+    EXT --> ROUTES
+    ROUTES --> ENGINE
+    ENGINE --> AI
+    AI --> POLICY
+    POLICY -->|allowed| ENGINE
+    ENGINE --> LLMTEXT
+    LLMTEXT --> GROQ
+    ENGINE --> RZPAPI
+    ENGINE <--> PG
+    CRON --> TICK
+    TICK --> ENGINE
+    DASH <--> PG
+```
+
+Every box above corresponds to a real file, not an aspirational diagram —
+follow the labels into the codebase. The database moved from a local
+SQLite file to Neon Postgres specifically because Vercel's serverless
+functions have no persistent disk for a file-based DB to survive on (see
+"What broke," #4) — the schema itself needed zero changes for the switch.
+
 ## AI judgment — the right tool in the right place, and where we chose not to use one
 
 Three deliberate design decisions, each traceable to a comment in the code
@@ -169,6 +218,20 @@ and the dashboard shows the live divergence rate with an itemized
 breakdown of exactly what changed and why. A 0% divergence rate would be
 an honest signal the AI layer isn't earning its keep — this is what makes
 that claim falsifiable instead of a slide.
+
+**Where a real LLM actually is wired in, deliberately, is customer-facing
+text generation — not the decision that gates money.** The Hinglish voice
+script (`src/lib/voiceScript.ts`) and the reminder/payment-link email copy
+(`src/lib/actions/index.ts`) call a real model (Groq, `src/lib/llm.ts`)
+when `GROQ_API_KEY` is configured, falling back to a fixed template
+otherwise — a task an LLM is genuinely good at (adapting tone and content
+to context) that a rules engine structurally can't do well, unlike the
+decision layer above. Even there, the model never originates the
+money-critical facts: the amount, the payment link, and the unsubscribe
+line are always appended by code afterward, never left for the model to
+reproduce. This is the same "right tool in the right place" judgment
+applied a second time, in the other direction — reaching for the LLM
+specifically where rules are structurally weak, not everywhere.
 
 ## What broke, and how we got out
 
@@ -221,6 +284,76 @@ of repeating the resolution side effects. Verified with 15 consecutive
 clean runs after the fix, having reproduced the failure 6 times in the 8
 runs immediately before it.
 
+**4. SQLite doesn't survive deployment, and the obvious fix hides two more
+bugs behind it.** The app ran fine locally against a SQLite file for weeks.
+Deploying to Vercel surfaced why that was never going to work in
+production: Vercel's serverless functions have no persistent disk, so a
+local DB file can't survive between requests there. Switching the Prisma
+datasource to Postgres (a free Neon project) turned out to be the easy
+part — a clean provider swap with zero field-level schema changes, since
+nothing in the codebase used raw SQL. Two real problems showed up
+immediately after: (a) `prisma migrate reset`/`migrate dev` hung or timed
+out intermittently against Neon's pooled (`-pooler`) connection string —
+traced to a documented Neon/Prisma incompatibility, since PgBouncer's
+transaction-mode pooling doesn't support the session-level Postgres
+advisory locks Prisma Migrate needs internally; fixed by pointing the test
+database specifically at Neon's *direct*, unpooled connection string,
+while the app's own runtime queries correctly stay on the pooled one. (b)
+The first Vercel deploy failed outright with a generic "Failed to collect
+page data" error on an unrelated-looking API route; the real cause,
+confirmed by deleting the generated Prisma client and reproducing locally,
+was that `@prisma/client`'s own postinstall hook (which is supposed to
+regenerate the client after `npm install`) wasn't firing reliably — fixed
+by adding an explicit top-level `"postinstall": "prisma generate"` script,
+which Prisma's own docs specifically call out as required for Vercel.
+Verified with a clean `npm run build` after deleting the generated client,
+and a full green deploy afterward.
+
+**5. `payment.refunded` — a webhook event that doesn't exist.** Written
+early in the build from a plausible-sounding guess at Razorpay's event
+naming, and never caught because nothing exercised it — there was no test
+for the refund path at all. Found only while actually registering a real
+webhook in Razorpay's dashboard and cross-checking their event list: the
+real events are `refund.created` and `refund.processed`, carried under
+`payload.refund.entity`, not `payload.payment.entity`. Fixed by switching
+to `refund.processed` (Razorpay's own documented "definitive final status"
+event) and, since none existed, writing the first real test for this path.
+
+**6. `SCHEDULE_FOLLOW_UP`: a decision that could never lead anywhere.**
+Found live, testing the real Razorpay payment flow end to end: a seeded
+case that had sent exactly one automated reminder got stuck proposing
+`SCHEDULE_FOLLOW_UP` forever, no matter how many times it was advanced —
+reproduced identically across three independent obligations, ten advances
+each, zero variation. Root cause: `SCHEDULE_FOLLOW_UP`'s execution parks
+the case with a scheduled next reminder but never actually sends one or
+advances `messagesSent`, so the next cycle re-derives the exact same
+decision from unchanged context and proposes `SCHEDULE_FOLLOW_UP` again —
+a case that had messaged once could never reach either a second reminder
+or escalation. The Policy Engine already owns "is it actually time for
+another touch yet" correctly, via `minMessageGapHours` and its own
+re-poll-in-an-hour mechanism for temporary blocks — so `ai.ts` was
+re-implementing that same wait, in the wrong layer, as a decision that
+never led anywhere new. Fixed by having the AI simply propose
+`SEND_REMINDER` again and letting the already-correct Policy Engine decide
+whether enough time has actually passed.
+
+**7. Tests were silently calling real external APIs.** Adding a real
+`GROQ_API_KEY` and real Razorpay keys to `.env` for live testing (see
+"Real customer contact" and the AI judgment section) had a side effect
+nobody intended: `vitest.config.mts` loads `.env`, and only
+`DATABASE_URL` was being overridden for tests — so every test run that
+touched LLM message generation or webhook signature verification was
+quietly hitting the real Groq API and validating against a real HMAC
+secret, and every `GENERATE_PAYMENT_LINK`/`OFFER_ALTERNATIVE_PAYMENT_METHOD`
+test was silently creating real (harmless, test-mode) Razorpay payment
+links instead of exercising the documented fallback paths the tests were
+actually meant to cover. Fixed by explicitly forcing `GROQ_API_KEY`,
+`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, and
+`STRIPE_WEBHOOK_SECRET` empty in the test environment regardless of what's
+configured in `.env` for local development — a test's behavior should
+never depend on which real credentials happen to be sitting in whoever's
+`.env` runs it.
+
 ## Product access
 
 This isn't a single-tenant demo — it's multi-tenant behind real
@@ -247,9 +380,15 @@ authentication:
 ## Stack
 
 - Next.js 16 (App Router) + TypeScript
-- Prisma + SQLite (swap `DATABASE_URL` for Postgres in production)
+- Prisma + Postgres (Neon in this deployment; started on SQLite locally,
+  moved for real deployment — see "What broke," #4)
 - Razorpay SDK (test mode) + webhook signature verification
+- Groq (LLM) for customer-facing message text, with a deterministic
+  template fallback — see "AI judgment" above
 - bcryptjs + jose for authentication (no external auth provider required)
+- Deployed on Vercel; a GitHub Actions workflow (`.github/workflows/tick.yml`)
+  pings the scheduler every 5 minutes, since Vercel's free tier only allows
+  daily cron jobs
 
 ## Getting started
 
@@ -257,15 +396,16 @@ authentication:
 npm install
 cp .env.example .env
 # then set SESSION_SECRET in .env — see the comment in .env.example for
-# a one-liner to generate one. DATABASE_URL already points at a local
-# SQLite file; everything else in .env.example is optional.
+# a one-liner to generate one. DATABASE_URL needs a Postgres connection
+# string (a free Neon project works fine); everything else in
+# .env.example is optional.
 npx prisma migrate dev
 npm run dev
 ```
 
-In a second terminal, start the scheduler — without it, `WAIT` and
-`SCHEDULE_FOLLOW_UP` cases only ever advance when a webhook happens to
-arrive or someone clicks **Advance** by hand:
+In a second terminal, start the scheduler — without it, `WAIT` cases only
+ever advance when a webhook happens to arrive or someone clicks
+**Advance** by hand:
 
 ```bash
 npm run scheduler
@@ -658,12 +798,13 @@ place it.
 ## Testing
 
 ```bash
-npm test        # vitest — spins up a throwaway SQLite DB per run
+npm test        # vitest — resets a dedicated Postgres test database per run;
+                # needs TEST_DATABASE_URL in .env, separate from DATABASE_URL
 npm run lint
 npx tsc --noEmit
 ```
 
-90 tests, all passing, covering provider-agnostic correlation, idempotency
+118 tests, all passing, covering provider-agnostic correlation, idempotency
 (scoped per merchant, not global), AI proposal + policy gating, the
 mandatory pre-action verification path, and the cross-channel resolution
 scenario end to end. The two cross-obligation detectors (provider-outage,

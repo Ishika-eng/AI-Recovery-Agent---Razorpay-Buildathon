@@ -268,9 +268,10 @@
     <p class="eyebrow">System architecture</p>
     <h1>Universal payment recovery &amp; reconciliation platform</h1>
     <p>
-      Three diagrams, each showing one mechanism: how an inbound provider event becomes a governed recovery
-      decision, how the data model keeps "what's owed" separate from "which transaction," and how a request
-      gets from an anonymous browser to a merchant's own scoped dashboard.
+      Four diagrams, each showing one mechanism: how an inbound provider event becomes a governed recovery
+      decision, how the data model keeps "what's owed" separate from "which transaction," how a request
+      gets from an anonymous browser to a merchant's own scoped dashboard, and how the deployed system actually
+      reaches Postgres, an LLM, and Razorpay's real API in production.
     </p>
   </header>
 
@@ -668,10 +669,88 @@
         <tr>
           <td>Data</td>
           <td><code>prisma/schema.prisma</code></td>
-          <td>SQLite in dev, swappable for Postgres &mdash; the obligation-centric model above.</td>
+          <td>Postgres (Neon) &mdash; the obligation-centric model above. Started on SQLite locally; moved because Vercel's serverless functions have no persistent disk for a local DB file to survive on.</td>
+        </tr>
+        <tr>
+          <td>Message personalization</td>
+          <td><code>src/lib/llm.ts</code>, <code>src/lib/voiceScript.ts</code>, <code>src/lib/actions/index.ts</code></td>
+          <td>A real LLM (Groq) writes the Hinglish voice script and email tone when configured, falling back to a fixed template otherwise. Never originates the amount, the payment link, or the unsubscribe line &mdash; those are always appended by code.</td>
+        </tr>
+        <tr>
+          <td>Real payment delivery</td>
+          <td><code>src/lib/actions/paymentLink.ts</code>, <code>email.ts</code></td>
+          <td>Creates a real Razorpay Payment Link and sends real email via SMTP when credentials are configured; reports a clearly-labeled simulated outcome otherwise, never throws.</td>
         </tr>
       </tbody>
     </table>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-num">05</span>
+      <h2>Deployment topology</h2>
+    </div>
+    <p class="lede">
+      The app runs on Vercel; the recovery cycle's autonomy depends on something calling
+      <code style="font-family:var(--font-mono)">/api/cron/tick</code> on a schedule, and Vercel's free tier only
+      allows a daily cron &mdash; too coarse to demo cases actually advancing. A GitHub Actions workflow fills that
+      gap for free, from inside the same repo a reviewer can already read.
+    </p>
+    <figure>
+      <div class="diagram-scroll">
+        <svg class="diagram" viewBox="0 0 900 300" role="img" aria-label="Deployment diagram: Razorpay, Stripe, and external webhooks, plus a GitHub Actions workflow running every five minutes, all reach the Next.js app deployed on Vercel. The Vercel app reads and writes a Neon Postgres database, and calls out to the Groq API for message personalization and the Razorpay API for real payment link creation.">
+          <defs>
+            <marker id="arrow4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <rect x="20" y="20" width="180" height="50" rx="7" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+          <text x="110" y="41" text-anchor="middle" class="box-label">Razorpay / Stripe</text>
+          <text x="110" y="57" text-anchor="middle" class="box-sub">real webhooks</text>
+
+          <rect x="20" y="90" width="180" height="50" rx="7" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+          <text x="110" y="111" text-anchor="middle" class="box-label">Merchant / external push</text>
+          <text x="110" y="127" text-anchor="middle" class="box-sub">POST /api/webhooks/external</text>
+
+          <rect x="20" y="160" width="180" height="58" rx="7" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+          <text x="110" y="182" text-anchor="middle" class="box-label">GitHub Actions</text>
+          <text x="110" y="198" text-anchor="middle" class="box-sub">tick.yml &mdash; every 5 min</text>
+          <text x="110" y="212" text-anchor="middle" class="box-sub">(Vercel Hobby cron is daily-only)</text>
+
+          <rect x="300" y="90" width="260" height="80" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="430" y="120" text-anchor="middle" class="box-label" font-weight="600">Next.js app on Vercel</text>
+          <text x="430" y="138" text-anchor="middle" class="box-sub">API routes, recovery engine,</text>
+          <text x="430" y="153" text-anchor="middle" class="box-sub">policy engine, dashboard</text>
+
+          <path d="M200,45 L300,110" marker-end="url(#arrow4)"/>
+          <path d="M200,115 L300,125" marker-end="url(#arrow4)"/>
+          <path d="M200,189 L300,150" marker-end="url(#arrow4)"/>
+
+          <rect x="640" y="20" width="230" height="50" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="755" y="41" text-anchor="middle" class="box-label">Neon Postgres</text>
+          <text x="755" y="57" text-anchor="middle" class="box-sub">pooled for app, direct for migrations</text>
+
+          <rect x="640" y="90" width="230" height="50" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="755" y="111" text-anchor="middle" class="box-label">Groq API</text>
+          <text x="755" y="127" text-anchor="middle" class="box-sub">LLM &mdash; message tone only</text>
+
+          <rect x="640" y="160" width="230" height="50" rx="7" fill="var(--surface)" stroke="var(--line-strong)"/>
+          <text x="755" y="181" text-anchor="middle" class="box-label">Razorpay API</text>
+          <text x="755" y="197" text-anchor="middle" class="box-sub">real payment link creation</text>
+
+          <path d="M560,120 L640,45" marker-end="url(#arrow4)"/>
+          <path d="M560,130 L640,115" marker-end="url(#arrow4)"/>
+          <path d="M560,150 L640,185" marker-end="url(#arrow4)"/>
+
+        </svg>
+      </div>
+      <figcaption>
+        Nothing in this topology is aspirational &mdash; every arrow here was exercised end to end with a real test
+        payment: a real Razorpay Payment Link, a real webhook delivery, real signature verification, and a real
+        obligation resolution on the live dashboard.
+      </figcaption>
+    </figure>
   </section>
 
   <footer>Universal Payment Recovery &amp; Reconciliation &mdash; architecture reference</footer>
