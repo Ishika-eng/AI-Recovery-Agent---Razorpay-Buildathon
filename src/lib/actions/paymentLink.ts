@@ -55,7 +55,28 @@ export async function createPaymentLink(input: {
       note: `Real Razorpay payment link created (${link.id}): ${link.short_url}`,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { channel: "not_configured", simulated: true, note: `Payment link creation failed, falling back to simulation: ${message}` };
+    return { channel: "not_configured", simulated: true, note: `Payment link creation failed, falling back to simulation: ${describeRazorpayError(err)}` };
+  }
+}
+
+// Razorpay's SDK rejects with a plain object shaped like
+// { statusCode, error: { code, description, ... } }, not a real Error
+// instance — `err instanceof Error ? err.message : String(err)` therefore
+// stringified every real API failure into the literal text "[object
+// Object]", making the audit trail (meant to be merchant-readable, see
+// AuditLog in prisma/schema.prisma) useless for diagnosing exactly the
+// failures a merchant would want to see. Found live: a real payment link
+// creation failing after keys were correctly configured produced this
+// exact unreadable message.
+function describeRazorpayError(err: unknown): string {
+  if (err && typeof err === "object" && "error" in err) {
+    const inner = (err as { error?: { description?: string; code?: string } }).error;
+    if (inner?.description) return inner.code ? `${inner.code}: ${inner.description}` : inner.description;
+  }
+  if (err instanceof Error) return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
   }
 }
