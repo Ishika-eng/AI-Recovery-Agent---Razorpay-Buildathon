@@ -106,6 +106,35 @@ describe("POST /api/webhooks/razorpay", () => {
     expect((await resA.json()).status).toBe("processed");
     expect((await resB.json()).status).toBe("processed");
   });
+
+  it("normalizes a refund.processed event into a refund on the correlated payment (not the non-existent 'payment.refunded')", async () => {
+    const merchant = await createMerchant();
+    const obligation = await createObligation({ merchantId: merchant.id, referenceType: "ORDER", referenceId: "ORDER_REFUND_1", amountPaise: 100000 });
+    const url = `http://localhost/api/webhooks/razorpay?merchant=${merchant.id}`;
+
+    await razorpayWebhook(
+      webhookRequest(url, {
+        event: "payment.captured",
+        payload: { payment: { entity: { id: "pay_refund_1", order_id: "order_pay_refund_1", receipt: obligation.referenceId, amount: 100000, currency: "INR" } } },
+      })
+    );
+
+    const res = await razorpayWebhook(
+      webhookRequest(url, {
+        event: "refund.processed",
+        payload: {
+          refund: { entity: { id: "rfnd_1", payment_id: "pay_refund_1", amount: 100000, currency: "INR" } },
+          payment: { entity: { id: "pay_refund_1", amount: 100000, amount_refunded: 100000, currency: "INR" } },
+        },
+      })
+    );
+    const json = await res.json();
+    expect(json.result).toBe("refund_issued");
+
+    const updated = await db.paymentObligation.findUniqueOrThrow({ where: { id: obligation.id } });
+    expect(updated.status).toBe("REFUNDED");
+    expect(updated.refundedAmountPaise).toBe(100000);
+  });
 });
 
 describe("POST /api/webhooks/stripe", () => {

@@ -45,6 +45,14 @@ type RazorpayEvent = {
         currency?: string;
       };
     };
+    refund?: {
+      entity: {
+        id: string;
+        payment_id: string;
+        amount: number;
+        currency?: string;
+      };
+    };
   };
 };
 
@@ -115,16 +123,27 @@ export class RazorpayAdapter implements PaymentProviderAdapter {
     // a refund carries the refunded payment's id, not the merchant's own
     // reference, so it's matched against the PaymentAttempt already on
     // record for it.
-    if (event.event === "payment.refunded") {
-      const refundedEntity = event.payload.payment?.entity;
-      if (!refundedEntity) return null;
+    //
+    // "payment.refunded" (what this listened for previously) is not a real
+    // Razorpay event — verified against Razorpay's own docs while wiring up
+    // the real webhook. The actual events are refund.created and
+    // refund.processed, carried under payload.refund.entity, not
+    // payload.payment.entity. Razorpay recommends refund.processed
+    // specifically as the definitive final-status event.
+    if (event.event === "refund.processed") {
+      const refundEntity = event.payload.refund?.entity;
+      if (!refundEntity?.payment_id) return null;
+      const paymentEntity = event.payload.payment?.entity;
       return {
         eventType: "REFUND_ISSUED",
         provider: "razorpay",
-        providerEventId: `rzp_${refundedEntity.id}_refunded_${refundedEntity.amount_refunded ?? refundedEntity.amount}`,
+        providerEventId: `rzp_${refundEntity.id}_refund_processed`,
         merchantId,
-        refundedPaymentId: refundedEntity.id,
-        refundAmountPaise: refundedEntity.amount_refunded ?? refundedEntity.amount,
+        refundedPaymentId: refundEntity.payment_id,
+        // amount_refunded on the payment entity is the cumulative total
+        // (what engine.ts's handleRefundIssued expects); fall back to this
+        // single refund's own amount if the payment entity isn't present.
+        refundAmountPaise: paymentEntity?.amount_refunded ?? refundEntity.amount,
       };
     }
 
