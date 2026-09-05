@@ -1180,7 +1180,12 @@ describe("silent obligations — checkout drop-off and overdue B2B receivables n
     expect(attempt.failureCategory).toBe("USER_DROPOFF");
 
     const recoveryCase = await db.recoveryCase.findUniqueOrThrow({ where: { obligationId: obligation.id } });
-    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id } });
+    // This cycle proposes GENERATE_PAYMENT_LINK and then, once it executes,
+    // immediately runs another cycle that proposes a follow-up — two rows,
+    // so an explicit order is required to reliably get the first one
+    // (Postgres, unlike SQLite, doesn't return rows in insertion order
+    // without one).
+    const action = await db.recoveryAction.findFirstOrThrow({ where: { caseId: recoveryCase.id }, orderBy: { createdAt: "asc" } });
     expect(action.actionType).toBe("GENERATE_PAYMENT_LINK");
   });
 

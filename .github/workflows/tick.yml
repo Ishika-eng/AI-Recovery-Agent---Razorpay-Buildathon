@@ -1,0 +1,21 @@
+name: Recovery cycle tick
+
+# Vercel's free Hobby plan only allows daily cron jobs, but this app's
+# WAIT / SCHEDULE_FOLLOW_UP cases need to advance every few minutes to show
+# real autonomous behavior in a demo (see src/app/api/cron/tick/route.ts).
+# GitHub Actions' schedule trigger has a 5-minute floor and is free — this
+# workflow just pings that route on a schedule instead of relying on
+# Vercel's own cron.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/cron/tick
+        run: |
+          curl -sf -X POST "${{ secrets.APP_URL }}/api/cron/tick" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
