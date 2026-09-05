@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { getProviderAdapter } from "@/lib/providers/registry";
 import { merchantAdapter } from "@/lib/merchants/genericEcommerce";
 import { decideRecoveryAction } from "@/lib/ai";
+import { generateVoiceScript } from "@/lib/voiceScript";
 import { decideNaiveBaseline } from "@/lib/baseline";
 import { evaluatePolicy, type PolicyContext } from "@/lib/policy";
 import { deliverAction } from "@/lib/actions";
@@ -775,6 +776,18 @@ export async function runRecoveryCycle(obligationId: string) {
   // naive fixed-schedule rule would have (PRD Problem 37).
   const baseline = decideNaiveBaseline(context);
 
+  // The decision layer above is deliberately deterministic (see ai.ts) and
+  // embeds a fixed Hinglish template as a placeholder script whenever it
+  // recommends a personal call. Here — the one place this cycle actually
+  // has both the full case context and an async boundary — swap that
+  // placeholder for a genuinely LLM-personalized script when one is
+  // configured, without changing the (synchronous, fully rule-tested)
+  // decision function's contract at all.
+  if (decision.action === "RECOMMEND_VOICE_OUTREACH") {
+    const script = await generateVoiceScript(context);
+    decision.reason = decision.reason.replace(/Suggested Hinglish script: ".*"$/, `Suggested Hinglish script: "${script}"`);
+  }
+
   await audit(obligation.merchantId, "AI", "PROPOSE_ACTION", decision.reason, {
     obligationId,
     caseId: recoveryCase.id,
@@ -1001,13 +1014,17 @@ export async function executeAction(actionId: string, waitMinutes?: number) {
     // partial payment (PRD Problem 24) landing between proposal and
     // execution would otherwise generate a payment link for the stale,
     // larger amount instead of what's actually still outstanding.
-    const delivery = await deliverAction(type, {
-      id: obligation.id,
-      referenceId: obligation.referenceId,
-      outstandingAmountPaise: fresh.outstandingAmountPaise,
-      currency: obligation.currency,
-      customerContact: obligation.customerContact,
-    });
+    const delivery = await deliverAction(
+      type,
+      {
+        id: obligation.id,
+        referenceId: obligation.referenceId,
+        outstandingAmountPaise: fresh.outstandingAmountPaise,
+        currency: obligation.currency,
+        customerContact: obligation.customerContact,
+      },
+      { reason: action.reason }
+    );
 
     await db.recoveryAction.update({
       where: { id: actionId },

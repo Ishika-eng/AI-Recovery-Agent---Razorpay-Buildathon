@@ -1,4 +1,5 @@
 import type { RecoveryCaseContext } from "@/lib/types";
+import { generateText } from "@/lib/llm";
 
 // Hinglish voice recovery — honestly scoped. This platform has no
 // telephony/IVR integration (no calling API keys, no PSTN access), so it
@@ -21,4 +22,23 @@ export function generateHinglishVoiceScript(context: RecoveryCaseContext): strin
     `Agar aap thodi der mein pay karna chahte hain, koi baat nahi — bas mujhe bata dijiye, main note kar loonga/loongi.`,
     `Dhanyavaad, aapka time dene ke liye.`,
   ].join(" ");
+}
+
+// LLM-generated variant of the same script — genuinely personalized to the
+// customer's relationship, history, and situation, which the fixed template
+// above (same six sentences for every case) structurally can't be. Falls
+// back to the deterministic template whenever no LLM is configured or the
+// call fails, so this is always safe to call and always returns something.
+export async function generateVoiceScript(context: RecoveryCaseContext): Promise<string> {
+  const fallback = generateHinglishVoiceScript(context);
+  const amount = `₹${(context.obligation.outstandingAmountPaise / 100).toFixed(2)}`;
+
+  const generated = await generateText({
+    system:
+      "You write short, warm, natural-sounding Hinglish (Hindi+English mix, Roman script) phone scripts for a payment recovery agent calling a customer about a pending payment. Keep it under 80 words, polite, never pushy, and offer to send a fresh payment link if there's a payment issue. Reply with the script only — no preamble, no labels.",
+    prompt: `Customer: ${context.customer.customerValue.toLowerCase()}-value, ${context.customer.relationshipAgeDays}-day relationship, ${context.customer.successfulPayments} prior successful payment(s). Amount due: ${amount} for a ${context.obligation.referenceType.toLowerCase()}.`,
+    maxTokens: 200,
+  });
+
+  return generated ?? fallback;
 }
