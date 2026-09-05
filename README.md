@@ -2,6 +2,8 @@
 
 **Razorpay AI Buildathon — Track 03, AI Revenue Recovery.**
 
+**Live deployment:** [ai-recovery-agent-razorpay-buildath.vercel.app](https://ai-recovery-agent-razorpay-buildath.vercel.app) — sign up, click **Load demo batch**, and everything described below is running for real, against a real Postgres database, not simulated on someone's laptop.
+
 > "Find revenue that's slipping away and win it back... don't just identify
 > the problem. Show measured money recovered across a batch, with
 > compliant escalation, stopping rules, and an audit trail." — the track brief
@@ -75,6 +77,50 @@ The track brief's bar, mapped directly to what's actually in this repo:
    out of "Active recovery cases" and the **cross-channel resolutions**
    counter increment, proving the flagship "paid through a different
    channel" scenario end to end.
+
+## Using it as a real service — connecting real webhooks
+
+Everything above works with zero external accounts. To feed it real
+provider events instead of the synthetic demo batch:
+
+1. **Sign up** on the [live deployment](https://ai-recovery-agent-razorpay-buildath.vercel.app)
+   (or your own, if self-hosting — see "Getting started" below) and accept
+   the onboarding terms.
+2. Go to the dashboard's **Setup** tab. It shows your account's real
+   webhook URLs, with your merchant id already baked into the query
+   string so events route to the right account:
+   ```
+   /api/webhooks/razorpay?merchant=<your-merchant-id>
+   /api/webhooks/stripe?merchant=<your-merchant-id>
+   /api/webhooks/external?merchant=<your-merchant-id>
+   ```
+3. In your **Razorpay Dashboard → Account & Settings → Webhooks**, add a
+   webhook pointing at the full URL (`https://<your-deployment>` + the
+   path above), pick a secret, and select at minimum `payment.captured`,
+   `payment.failed`, and `payment_link.paid` (add `refund.processed` and
+   `payment.dispute.created` for the full loop). Do the equivalent in
+   Stripe's dashboard for the Stripe URL.
+4. Create a `PaymentObligation` for whatever you want tracked (via
+   `createObligation()` if self-hosting, or your own integration code) —
+   the platform correlates every inbound webhook back to it by
+   `(merchantId, referenceType, referenceId)`, never by guessing from
+   amount or customer.
+5. Fail a real test-mode payment against that obligation's reference id.
+   The webhook fires, the recovery cycle runs, and a real `AI proposes →
+   Policy Engine gates → execute or hold for approval` cycle plays out on
+   your dashboard exactly as described above — with a real payment link
+   generated via the Razorpay API if `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`
+   are configured, or a clearly-labeled simulated outcome if not.
+
+**One honest limitation of the live deployment specifically:** its
+`RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET` are one shared test-mode account
+(the author's own), not a per-merchant credential — every merchant signing
+up on that instance shares the same underlying Razorpay account for real
+payment link creation. This deployment demonstrates the full mechanism
+end to end (see
+[`docs/proofs/REAL_PAYMENT_PROOF.md`](docs/proofs/REAL_PAYMENT_PROOF.md)),
+but a genuine multi-tenant SaaS version would need per-merchant provider
+credentials (OAuth or stored keys), which isn't built here.
 
 ## Architecture
 
@@ -450,11 +496,14 @@ middle ground, not just the cases someone happens to be watching).
 
 - **Locally**: `npm run scheduler` polls `/api/cron/tick` every 15s
   (`scripts/tick-loop.mjs`).
-- **In production**: `vercel.json` registers the same route as a Vercel
-  Cron job (every 5 minutes); Vercel automatically sends
+- **In production**: a GitHub Actions workflow
+  (`.github/workflows/tick.yml`) pings this route every 5 minutes — not
+  Vercel's own Cron, which `vercel.json` also registers but only daily,
+  since that's the finest granularity Vercel's free Hobby plan allows (see
+  "What broke," #4). Whichever scheduler calls it authenticates with
   `Authorization: Bearer $CRON_SECRET` when that env var is set. Any other
-  scheduler (GitHub Actions, plain cron) works the same way — `POST` or
-  `GET` the route with that header.
+  scheduler (a plain cron box, cron-job.org) works the same way — `POST`
+  or `GET` the route with that header.
 
 `processDueCases()` (`src/lib/engine.ts`) finds every `WAITING` case whose
 `nextActionAt` has passed, across every merchant, and re-runs the recovery
@@ -492,6 +541,11 @@ external effect instead of a log line:
 Leave the Razorpay keys and SMTP vars blank and the platform behaves
 exactly as it did before — fully demoable with zero external credentials.
 Fill them in and the same decision loop starts having real-world effects.
+
+This was actually run, not just implemented — a real Razorpay Payment
+Link, paid with a real test-mode checkout, correlated and resolved by a
+real webhook against the live deployed app. Screenshots and the full
+trace: [`docs/proofs/REAL_PAYMENT_PROOF.md`](docs/proofs/REAL_PAYMENT_PROOF.md).
 
 ## Dispute holds and customer opt-out — guardrails with a real trigger
 
@@ -826,6 +880,11 @@ test suite actually caught, not just the ones it was written to prevent.
 
 Stated plainly, not hidden in the code:
 
+- **Razorpay/Stripe credentials are one shared account per deployment,
+  not per merchant** — every merchant signed up on a given deployment's
+  provider keys, so a real multi-tenant SaaS would need per-merchant
+  credentials (OAuth or stored keys), which isn't built here. See "Using
+  it as a real service" above.
 - **Fraud detection is deliberately narrow** (rapid repeated attempts on
   *one* obligation) — it doesn't model stolen-card reuse across different
   obligations or customers, since no card fingerprint is captured

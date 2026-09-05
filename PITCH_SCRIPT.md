@@ -1,165 +1,214 @@
 # Pitch video script — Universal Payment Recovery & Reconciliation
 
-Target length: ~5 minutes. Timestamps are approximate — pace to what feels
-natural when you actually say it out loud, don't rush to hit a number.
-
-Record the demo screen capture first (steps in brackets), then narrate over
-it, or narrate live while screen-recording — whichever you're more
-comfortable delivering without sounding read-off-a-page.
-
----
-
-## 1. Cold open + the problem (0:00–0:50)
-
-**[Screen: cold open directly on the app — no title card, no talking-head
-intro. Have a case already sitting in "Active recovery cases" before you
-hit record. Click "Simulate paid elsewhere" as the very first thing the
-viewer sees.]**
-
-> [as the case vanishes from the list] Watch that. A customer whose
-> payment just failed on Razorpay... paid anyway, through a completely
-> different channel. And the system didn't send them another reminder.
->
-> [switch to the History tab, point at the RECOVERY_ACTION_PREVENTED entry]
-> It cancelled one that was already scheduled. Most payment recovery tools
-> would've messaged this person anyway — because most of them don't
-> actually know that happened.
-
-**[Cut to you on camera, or stay on the app — your call.]**
-
-> Here's why that's harder than it sounds. Most failed-payment recovery
-> tools think in one step: payment failed, retry the payment. That breaks
-> constantly. The customer above paid through a different provider than
-> the one that failed. Somewhere else, a card is simply expired — no
-> amount of retrying will ever clear it. A provider itself goes down, and
-> every "declined" in that window looks like the customer's fault when
-> it's not. A payment lands for less than what was owed. And somewhere,
-> the same card is being retried five times in ten minutes — that's not a
-> struggling customer, that's someone testing a stolen one.
->
-> Five real situations, and a single-step retry loop can't tell any of
-> them apart. This platform is built around one idea that represents all
-> five at once: track the **payment obligation** — "Order #789 owes
-> ₹5,000" — not the individual transaction. Let me show you the rest of
-> it.
+Target length: **under 5:00**. Every section below is trimmed to a real
+word-count budget for that timing — read it at a natural pace (roughly
+150 words/minute) and it lands under the line with a few seconds to
+spare. This is recordable in one continuous take by switching between
+three already-open browser tabs.
 
 ---
 
-## 2. Live demo (0:50–3:20)
+## Before you hit record — setup checklist
 
-**[Screen: navigate to the signed-up dashboard, or sign up live if you want
-the full flow on camera. Click "Load demo batch."]**
+Do all of this *before* you start recording, so the take is a clean
+switch-tab-and-talk with no dead air:
 
-> Let me show you, not just tell you.
->
-> [as data loads] This just seeded a batch of realistic failures across
-> Razorpay and Stripe — card declines, timeouts, a UPI mandate failure, an
-> overdue invoice, an abandoned checkout. Nothing here is staged after the
-> fact — everything you're about to see is the platform reacting to this
-> data live.
+1. **Tab 1 — the intro card.** Open your published intro page
+   (`https://claude.ai/code/artifact/41347b72-b2d6-4e04-b0e8-7c9305201384`)
+   and leave it ready to go full-screen.
+2. **Tab 2 — the architecture doc.** Open `docs/architecture.html` from
+   your project folder directly in a browser tab (drag the file in, or
+   `open docs/architecture.html` from the project root). It's local, not
+   deployed on Vercel.
+3. **Tab 3 — the live app.** Sign in to a merchant account, click **Load
+   demo batch**, and confirm before recording that:
+   - the outage banner is showing,
+   - the **approval queue** has at least one case citing "exceeds the
+     auto-approve ceiling" *and* at least one citing an escalation —
+     reload the batch if you only have one type,
+   - there's an untouched case in **Active recovery cases** for the
+     "Simulate paid elsewhere" moment.
+4. **Rehearse the tab order once**, unrecorded: Tab 1 → Tab 2 → Tab 3,
+   then the in-app switch from Overview to History. Know exactly which
+   click or shortcut gets you there instantly.
+5. Full-screen your browser — hide bookmarks, other tabs, notifications.
 
-**[Point at the outage banner if one appears, or trigger it by loading a
-big enough batch.]**
-
-> See this banner — "possible provider outage detected." That's not
-> scripted. The bulk failure batch genuinely crossed a real threshold: this
-> many transient failures on one provider in this short a window looks
-> like the provider's problem, not the customer's — so the platform is
-> holding off contacting anyone until it clears, instead of blasting
-> confused customers with "please retry" messages that would be wrong.
-
-**[Scroll to the approval queue. Pick the highest-value case.]**
-
-> This case is above the auto-approve ceiling, so it's sitting here for a
-> human — me — to sign off on, not executing on its own. That's a real
-> guardrail, not a suggestion: the deterministic Policy Engine sits between
-> every AI proposal and execution, and it cannot be bypassed regardless of
-> how confident the AI is.
-
-**[Click Approve. Point at the ₹ Recovered / Recovery Rate tiles moving.]**
-
-> And there it is — ₹ recovered and the recovery rate just moved, live,
-> from a real action I just approved.
-
-**[Click "Simulate paid elsewhere" on any active case.]**
-
-> This is the flagship scenario: a customer paying through a completely
-> different channel than the one that just failed them. Watch what
-> happens — [pause] — that case just disappeared from active recovery, and
-> if you check the audit trail —
-
-**[Switch to History tab, point at a RECOVERY_ACTION_PREVENTED entry.]**
-
-> — it explicitly logged that it *cancelled* a scheduled reminder instead
-> of sending it, because the customer had already paid elsewhere. A naive
-> retry-loop tool would have messaged them anyway.
-
-**[Optional, if you have time and it's set up: show the real Razorpay
-payment link / webhook proof — screenshot or live click-through of
-approving a case, showing the real rzp.io link, and the obligation
-resolving.]**
-
-> And this isn't simulated end to end either — this specific case just
-> created a real Razorpay test-mode payment link, and when it's paid, a
-> real webhook comes back to this app, gets signature-verified, and
-> resolves the obligation. I've tested this exact loop live with real test
-> payments, not just mocked data.
+Once that's true, hit record and don't stop until the close.
 
 ---
 
-## 3. Why it's trustworthy, not just automated (3:20–4:35)
+## 1. The intro card (0:00–0:55)
 
-**[Screen: stay on dashboard, or switch to code / architecture.html if you
-want a visual.]**
+**[Tab 1 — the intro card, full-screen. One beat of silence before you
+start talking.]**
 
-> Here's the part that actually matters for a platform that touches money:
-> where the AI is, and where it deliberately isn't.
+> Track the obligation. Not the transaction.
 >
-> The decision layer — "what should we do next for this case" — is a
-> deterministic rules engine today, not an LLM call. That's not a
-> limitation I'm hiding; it's a deliberate choice, and it's documented in
-> the code. Every decision it makes is also compared against a naive,
-> fixed-schedule baseline — no customer-value calibration, no outage
-> awareness — and the dashboard shows the live divergence rate. Right now
-> it's diverging on the vast majority of decisions, which is the honest,
-> falsifiable version of "the AI is adding value," not a slide claiming it.
+> Five different situations get one identical response from most payment
+> recovery tools: a customer pays elsewhere, a card is expired, a
+> provider goes down, a payment lands short, someone's testing a stolen
+> card. A single-step retry loop can't tell any of them apart.
 >
-> Where a real LLM *is* wired in is customer-facing text — the Hinglish
-> voice-call script, the reminder email tone. That's a task an LLM is
-> genuinely good at that a template structurally can't do — adapting to
-> who the customer is. And even there, the model never touches the
-> money-critical facts: the amount, the payment link, the unsubscribe line
-> are always inserted by code, never generated.
+> [point at the stats row] Twenty to forty percent of subscription churn
+> is involuntary — not customers leaving, a failed payment nobody
+> recovered. About nine percent of monthly recurring revenue is lost this
+> way. And fifty to eighty-five percent of it is recoverable, if the
+> recovery logic actually understands why the payment failed.
 >
-> And nothing here is a black box. Every AI proposal, every policy
-> decision, every execution gets written to an audit log a merchant can
-> actually read — not a debug log.
+> That nine percent isn't lost revenue. It's earned revenue, sitting
+> behind a retry loop that never learned why the payment actually failed.
+>
+> Let me show you how this platform knows the difference.
+
+**[Switch to Tab 2 now.]**
 
 ---
 
-## 4. Close (4:35–5:00)
+## 2. Architecture, briefly (0:55–1:30)
 
-> This started from one modeling decision — track the obligation, not the
-> transaction — and everything else falls out of getting that right:
-> cross-channel resolution, partial payments, dead cards, provider
-> outages, card testing, all representable at once.
+**[Tab 2 — architecture.html. One continuous slow scroll through all four
+diagrams while you say this.]**
+
+> Thirty seconds on how this works — every box here is a real file, not
+> an aspirational diagram. Every provider webhook normalizes into one
+> shape, then the AI proposes one action from a fixed set, a separate
+> deterministic Policy Engine gates it, and only then does anything
+> execute — the AI can't bypass that or invent its own action. It's built
+> around obligations, not transactions, which is what makes cross-channel
+> resolution and partial payments representable at all. And it's
+> deployed for real — Vercel, a real Postgres database, a real Razorpay
+> integration tested end to end. Let's see it live.
+
+**[Switch to Tab 3 now.]**
+
+---
+
+## 3. Live demo (1:30–4:05)
+
+### 3a. Overview — the proof it's real (1:30–2:00)
+
+**[Tab 3 — the live dashboard, Overview tab, already loaded with demo
+data.]**
+
+> This is the live, deployed app — every number here is computed from a
+> real database right now.
+
+**[Point at the outage banner.]**
+
+> This banner isn't scripted — the demo batch genuinely crossed a real
+> failure threshold, so the platform is holding off contacting anyone
+> until it clears.
+
+**[Point at the "AI vs. Fixed Rules" tile.]**
+
+> And this tile is the falsifiable one: how often the calibrated AI
+> genuinely chose differently than a naive fixed-schedule rule would
+> have. A zero here would be an honest signal the AI isn't earning its
+> complexity.
+
+### 3b. Approval queue — two different guardrails (2:00–2:40)
+
+**[Scroll to the approval queue. Point at the case citing the auto-approve
+ceiling.]**
+
+> Two cases here, two different guardrails. This one's held because its
+> amount exceeds the auto-approve ceiling — a human has to sign off
+> before it executes. That's the deterministic Policy Engine, live, not a
+> diagram.
+
+**[Click Approve. Point at the ₹ Recovered / Recovery Rate tiles
+changing.]**
+
+> And there — recovered and recovery rate just moved, from the action I
+> just approved.
+
+**[Point at the escalation-type case.]**
+
+> This other one's held for a completely different reason — an outright
+> escalation, independent of amount. Every customer-facing action gets
+> checked against several independent guardrails, not just one.
+
+### 3c. The flagship cross-channel moment (2:40–3:15)
+
+**[Scroll to Active recovery cases. Click "Simulate paid elsewhere" on an
+untouched case.]**
+
+> Now the scenario this whole platform is built around — a customer
+> paying through a completely different channel than the one that just
+> failed them. Watch — that case just disappeared from active recovery.
+
+**[Switch to the History tab. Point straight at the
+RECOVERY_ACTION_PREVENTED entry.]**
+
+> And here's the receipt: it explicitly logged that it *cancelled* a
+> reminder already scheduled, because the customer had paid elsewhere. A
+> naive retry-loop tool would have messaged them anyway, with no record
+> of why that was wrong.
+
+### 3d. It's really deployed (3:15–3:35)
+
+**[Switch to the Setup tab. Point at the webhook URLs.]**
+
+> One more thing — these are the real webhook URLs Razorpay and Stripe
+> hit in production. I've tested that loop end to end too: a real
+> Razorpay payment link, a real webhook, signature-verified, resolving
+> the obligation for real.
+
+---
+
+## 4. Why it's trustworthy, not just automated (3:35–4:25)
+
+**[Stay on Tab 3, talking-head style is fine here too.]**
+
+> What matters most here: where the AI is, and where it deliberately
+> isn't. The decision layer is a deterministic rules engine today, not an
+> LLM call — documented, not hidden — and it's benchmarked live against a
+> naive fixed-schedule baseline, diverging on the vast majority of
+> decisions right now. That's the honest, falsifiable version of "the AI
+> adds value," not a slide claiming it.
 >
-> It's live on Vercel right now, running against a real Postgres database,
-> with a real Razorpay integration I've verified end to end, 118 passing
-> tests, and an honest account — in the README — of every real bug found
-> along the way and exactly how it got fixed. Thanks for watching.
+> Where a real LLM *is* wired in is customer-facing text — the voice
+> script, the reminder tone — genuinely something an LLM is good at that
+> a template isn't. Even there, it never touches the money-critical
+> facts — those are always inserted by code, never generated.
+>
+> And nothing here is a black box — every proposal, every policy verdict,
+> every execution writes to an audit log a merchant can actually read.
+
+---
+
+## 5. Close (4:25–4:50)
+
+> One modeling decision — track the obligation, not the transaction — and
+> everything else follows: cross-channel resolution, partial payments,
+> dead cards, provider outages, card testing, all at once.
+>
+> It's live on Vercel right now, against a real Postgres database, with a
+> real Razorpay integration verified end to end, a hundred and eighteen
+> passing tests, and an honest account of every real bug found along the
+> way and exactly how it got fixed. Thanks for watching.
 
 ---
 
 ## Notes for recording
 
-- If you're short on time, cut the "real Razorpay webhook" bullet in
-  section 2 rather than rushing through the trust section in 3 — the
-  policy-engine/audit-trail story is the more differentiating point for
-  judges than proving the plumbing works.
-- Don't read this word-for-word on camera — say it in your own words once
-  you've internalized the beats. A slightly rougher, clearly-genuine
-  delivery reads better than a stiff recitation.
-- The exact numbers you'll see live (₹ recovered, divergence %) will differ
-  from any example above since they're computed live from real DB state —
-  that's the point, don't worry about matching a specific number.
+- **This is already the trimmed cut** — don't add material back in
+  without removing something else, or you'll go back over 5:00.
+- **Don't read this word-for-word.** Internalize each beat and say it in
+  your own words — especially section 1, where you're narrating text the
+  viewer can also read for themselves.
+- **The live numbers will differ from any example above** — that's the
+  point. Describe what you genuinely see when you record, don't chase a
+  specific figure.
+- **Practice the tab switches** (Tab 1→2 at ~0:55, Tab 2→3 at ~1:30, plus
+  the in-app Overview→History→Setup switches in section 3) a couple of
+  times unrecorded first — a smooth switch mid-sentence reads as
+  confident; a fumbled one is the most likely reason to want a retake.
+- **If you still run long**, the safest cut is 3d (the webhook-URLs beat)
+  — fold its one real claim ("I've tested the real webhook loop end to
+  end") into a single clause inside section 4 instead. Don't cut section
+  4 itself, or the approval-queue/cross-channel beats in 3b/3c — those are
+  the most differentiating material for judges.
+- **Want the fuller ~8-minute version back** — the one that walks every
+  tab (Insights included) in full detail — just ask; it's easy to
+  regenerate from this session.
