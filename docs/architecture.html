@@ -159,6 +159,19 @@
     min-width: 640px;
   }
 
+  /* Every connector/arrow path is a direct child of its <svg class="diagram">
+     and never sets its own fill — SVG defaults an unfilled path to solid
+     black, which for a multi-segment curved path (M...Q...L...) fills the
+     implied closed shape between the curve and its own start/end points,
+     not just the stroke line. Invisible-ish in light mode against a near-
+     white background; opaque black blobs covering text in dark mode. The
+     child combinator here deliberately excludes the arrowhead marker's own
+     <path fill="currentColor"> three levels deeper (svg > defs > marker >
+     path), which needs to stay filled to render as a solid triangle. */
+  svg.diagram > path {
+    fill: none;
+  }
+
   figcaption {
     font-size: 13px;
     color: var(--ink-muted);
